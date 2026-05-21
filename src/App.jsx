@@ -1213,9 +1213,279 @@ function SportsbooksPage() {
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 
+
+// ─── PARLAY TOOL ─────────────────────────────────────────────────────────────
+
+function ParlayTool({ events }) {
+  const [legs, setLegs] = useState([]);
+  const [stake, setStake] = useState("100");
+  const [showAddLeg, setShowAddLeg] = useState(false);
+  const [legSearch, setLegSearch] = useState("");
+  const [selectedEvent, setSelectedEventForLeg] = useState(null);
+  const [legMarket, setLegMarket] = useState("h2h");
+  const [legOutcome, setLegOutcome] = useState(null);
+
+  // Convert american to decimal
+  function toDecimal(american) {
+    if (!american) return 1;
+    const n = parseFloat(american);
+    if (n > 0) return n / 100 + 1;
+    return 100 / Math.abs(n) + 1;
+  }
+
+  // Calculate parlay payout for a book given legs
+  function calcParlay(bookApiKey, legList) {
+    if (legList.length < 2) return null;
+    let decimal = 1;
+    for (const leg of legList) {
+      const odds = leg.bookOdds[bookApiKey];
+      if (!odds) return null; // book doesn't have this leg
+      decimal *= toDecimal(odds);
+    }
+    const stakeNum = parseFloat(stake) || 100;
+    const payout = decimal * stakeNum;
+    const profit = payout - stakeNum;
+    return { decimal: decimal.toFixed(3), payout: payout.toFixed(2), profit: profit.toFixed(2), american: decimal >= 2 ? `+${Math.round((decimal-1)*100)}` : `-${Math.round(100/(decimal-1))}` };
+  }
+
+  // Get available outcomes for an event/market
+  function getOutcomes(ev, market) {
+    const bm = ev.bookMap;
+    if (market === "h2h") {
+      const outs = [];
+      if (bm.h2h?.home && Object.keys(bm.h2h.home).length) outs.push({ label: ev.home, key: "home", oddsMap: bm.h2h.home });
+      if (bm.h2h?.away && Object.keys(bm.h2h.away).length) outs.push({ label: ev.away, key: "away", oddsMap: bm.h2h.away });
+      if (bm.h2h?.draw && Object.keys(bm.h2h.draw).length) outs.push({ label: "Draw", key: "draw", oddsMap: bm.h2h.draw });
+      return outs;
+    }
+    if (market === "spreads") {
+      const outs = [];
+      const hl = bm.spreads?.home_line ? Object.values(bm.spreads.home_line)[0] : null;
+      const al = bm.spreads?.away_line ? Object.values(bm.spreads.away_line)[0] : null;
+      if (bm.spreads?.home) outs.push({ label: `${ev.home} ${hl != null ? fmtAmerican(hl) : ""}`, key:"sp_home", oddsMap: bm.spreads.home });
+      if (bm.spreads?.away) outs.push({ label: `${ev.away} ${al != null ? fmtAmerican(al) : ""}`, key:"sp_away", oddsMap: bm.spreads.away });
+      return outs;
+    }
+    if (market === "totals") {
+      const tl = bm.totals?.over_line ? Object.values(bm.totals.over_line)[0] : null;
+      const outs = [];
+      if (bm.totals?.over) outs.push({ label: `Over ${tl ?? ""}`, key:"tot_over", oddsMap: bm.totals.over });
+      if (bm.totals?.under) outs.push({ label: `Under ${tl ?? ""}`, key:"tot_under", oddsMap: bm.totals.under });
+      return outs;
+    }
+    return [];
+  }
+
+  function addLeg(ev, outcome) {
+    // Get best odds across all books for display, store per-book odds
+    const leg = {
+      id: `${ev.id}_${outcome.key}`,
+      game: `${ev.away} @ ${ev.home}`,
+      label: outcome.label,
+      sport: ev.sportLabel,
+      icon: ev.icon,
+      bookOdds: outcome.oddsMap,
+    };
+    if (legs.find(l => l.id === leg.id)) return; // no dupes
+    setLegs(prev => [...prev, leg]);
+    setShowAddLeg(false);
+    setSelectedEventForLeg(null);
+    setLegSearch("");
+    setLegOutcome(null);
+  }
+
+  function removeLeg(id) { setLegs(prev => prev.filter(l => l.id !== id)); }
+
+  // Calculate results per book
+  const bookResults = SPORTSBOOKS.map(book => {
+    const result = calcParlay(book.apiKey, legs);
+    return { book, result };
+  }).filter(b => b.result !== null);
+
+  bookResults.sort((a, b) => parseFloat(b.result.profit) - parseFloat(a.result.profit));
+  const bestPayout = bookResults[0]?.result?.profit;
+
+  const filteredEvents = events.filter(ev =>
+    !legSearch || ev.home.toLowerCase().includes(legSearch.toLowerCase()) || ev.away.toLowerCase().includes(legSearch.toLowerCase())
+  ).slice(0, 20);
+
+  const markets = [
+    { id:"h2h", label:"Moneyline" },
+    ...(selectedEvent?.bookMap?.spreads ? [{ id:"spreads", label:"Spread" }] : []),
+    ...(selectedEvent?.bookMap?.totals  ? [{ id:"totals",  label:"Total"  }] : []),
+  ];
+
+  return (
+    <div className="fade-up">
+      <div style={{ marginBottom:20 }}>
+        <h2 style={{ fontSize:22, fontWeight:800, color:C.text, marginBottom:4 }}>Parlay Comparison</h2>
+        <p style={{ fontSize:14, color:C.muted }}>Build a parlay and see which sportsbook pays the most.</p>
+      </div>
+
+      {/* Stake input */}
+      <div className="card" style={{ padding:16, marginBottom:16, display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ fontSize:13, fontWeight:700, color:C.muted, flexShrink:0 }}>Stake ($)</div>
+        <input
+          value={stake}
+          onChange={e => setStake(e.target.value.replace(/[^0-9.]/g,""))}
+          style={{ flex:1, padding:"8px 12px", borderRadius:8, border:`1.5px solid ${C.border}`, fontSize:16, fontFamily:"Roboto Mono,monospace", fontWeight:700, color:C.text, background:"#F9FAFB", textAlign:"right" }}
+        />
+        <div style={{ fontSize:13, color:C.faint }}>to win</div>
+      </div>
+
+      {/* Parlay legs */}
+      <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:12 }}>
+        {legs.map((leg, i) => {
+          const best = bestOdds(leg.bookOdds);
+          return (
+            <div key={leg.id} className="card" style={{ padding:"12px 16px", display:"flex", alignItems:"center", gap:12 }}>
+              <div style={{ width:28, height:28, borderRadius:6, background:C.accentBg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, flexShrink:0 }}>
+                {leg.icon}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:12, color:C.faint, marginBottom:2 }}>{leg.sport} · {leg.game}</div>
+                <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{leg.label}</div>
+                {best.book && <div style={{ fontSize:11, color:best.book.color, marginTop:2 }}>Best odds: <strong>{fmtAmerican(best.best)}</strong> @ {best.book.name}</div>}
+              </div>
+              <button onClick={() => removeLeg(leg.id)} style={{ background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:20, padding:4, flexShrink:0 }}>×</button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add leg button */}
+      <button onClick={() => setShowAddLeg(true)} className="btn" style={{ width:"100%", padding:12, background:C.accentBg, color:C.accent, fontSize:14, border:`1.5px dashed ${C.accent}`, marginBottom:20 }}>
+        + Add Leg {legs.length > 0 ? `(${legs.length} leg${legs.length>1?"s":""} added)` : ""}
+      </button>
+
+      {/* Add leg modal */}
+      {showAddLeg && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:100, display:"flex", alignItems:"flex-end" }} onClick={() => { setShowAddLeg(false); setSelectedEventForLeg(null); }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:C.surface, borderRadius:"20px 20px 0 0", padding:20, width:"100%", maxHeight:"80vh", overflowY:"auto" }}>
+            <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:16 }}>
+              {selectedEvent ? `${selectedEvent.away} @ ${selectedEvent.home}` : "Select a Game"}
+            </div>
+
+            {!selectedEvent && (
+              <>
+                <input
+                  value={legSearch}
+                  onChange={e => setLegSearch(e.target.value)}
+                  placeholder="🔍 Search teams..."
+                  autoFocus
+                  style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:14, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:12 }}
+                />
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {filteredEvents.map(ev => (
+                    <div key={ev.id} onClick={() => { setSelectedEventForLeg(ev); setLegMarket("h2h"); }} style={{ padding:"12px 14px", borderRadius:10, border:`1px solid ${C.border}`, cursor:"pointer", background:"#F9FAFB" }}>
+                      <div style={{ fontSize:11, color:C.faint, marginBottom:3 }}>{ev.icon} {ev.sportLabel} · {ev.time}</div>
+                      <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{ev.away} @ {ev.home}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {selectedEvent && (
+              <>
+                <button onClick={() => setSelectedEventForLeg(null)} style={{ background:"none", border:"none", cursor:"pointer", color:C.accent, fontSize:13, padding:"0 0 12px 0" }}>← Back to games</button>
+                <div style={{ display:"flex", gap:8, marginBottom:16, overflowX:"auto" }}>
+                  {markets.map(m => <Pill key={m.id} active={legMarket===m.id} onClick={()=>setLegMarket(m.id)}>{m.label}</Pill>)}
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {getOutcomes(selectedEvent, legMarket).map(outcome => {
+                    const best = bestOdds(outcome.oddsMap);
+                    const alreadyAdded = legs.find(l => l.id === `${selectedEvent.id}_${outcome.key}`);
+                    return (
+                      <div key={outcome.key} onClick={() => !alreadyAdded && addLeg(selectedEvent, outcome)} style={{ padding:"14px 16px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded ? "default" : "pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <div>
+                          <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.label}</div>
+                          {best.book && <div style={{ fontSize:12, color:best.book.color, marginTop:2 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
+                        </div>
+                        <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent }}>
+                          {alreadyAdded ? "✓ Added" : "+ Add"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {legs.length >= 2 && bookResults.length > 0 && (
+        <div>
+          <div style={{ fontSize:13, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:12 }}>
+            {legs.length}-Leg Parlay · ${stake} stake
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {bookResults.map(({ book, result }, i) => {
+              const isB = i === 0;
+              const diff = isB ? null : (parseFloat(result.profit) - parseFloat(bestPayout)).toFixed(2);
+              return (
+                <div key={book.apiKey} className="card" onClick={() => trackAndOpen(book, "parlay")} style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:14, cursor:"pointer", border:`1.5px solid ${isB ? book.color : C.border}`, background: isB ? `${book.color}08` : C.surface, transition:"all 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.transform="translateY(-1px)"}
+                  onMouseLeave={e => e.currentTarget.style.transform="translateY(0)"}
+                >
+                  <div style={{ width:44, height:44, borderRadius:10, background:book.color, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:"#fff", fontFamily:"Roboto Mono,monospace", flexShrink:0 }}>
+                    {book.short}
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
+                      <span style={{ fontSize:15, fontWeight:700, color:C.text }}>{book.name}</span>
+                      {isB && <Badge color={book.color} bg={`${book.color}18`}>🏆 Best Payout</Badge>}
+                    </div>
+                    <div style={{ fontSize:12, color:C.muted }}>
+                      {result.american} odds · {result.decimal}x multiplier
+                    </div>
+                  </div>
+                  <div style={{ textAlign:"right", flexShrink:0 }}>
+                    <div className="mono" style={{ fontSize:20, fontWeight:800, color: isB ? book.color : C.text }}>${result.payout}</div>
+                    <div style={{ fontSize:11, color: isB ? C.green : C.red, fontWeight:600 }}>
+                      {isB ? `+$${result.profit} profit` : `-$${Math.abs(diff)} less`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Summary callout */}
+          {bookResults.length >= 2 && (
+            <div style={{ marginTop:16, background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:12, padding:"14px 18px" }}>
+              <div style={{ fontSize:13, fontWeight:700, color:C.green, marginBottom:4 }}>
+                💡 Best vs Worst: ${(parseFloat(bookResults[0].result.profit) - parseFloat(bookResults[bookResults.length-1].result.profit)).toFixed(2)} difference
+              </div>
+              <div style={{ fontSize:12, color:C.green }}>
+                {bookResults[0].book.name} pays ${bookResults[0].result.payout} vs {bookResults[bookResults.length-1].book.name} at ${bookResults[bookResults.length-1].result.payout} on the same parlay.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {legs.length === 1 && (
+        <div style={{ textAlign:"center", padding:"24px 0", color:C.faint, fontSize:14 }}>Add at least one more leg to compare payouts</div>
+      )}
+
+      {legs.length === 0 && (
+        <div className="card" style={{ padding:40, textAlign:"center" }}>
+          <div style={{ fontSize:40, marginBottom:12 }}>🎰</div>
+          <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:8 }}>Build your parlay</div>
+          <div style={{ fontSize:14, color:C.muted }}>Add 2+ legs and see exactly which sportsbook pays the most — and how much you're leaving on the table with the others.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const NAV = [
   { id:"odds",      label:"Odds",       icon:"📊" },
   { id:"arb",       label:"Arb Finder", icon:"💰" },
+  { id:"parlay",    label:"Parlay",     icon:"🎰" },
   { id:"movement",  label:"Movement",   icon:"📈" },
   { id:"alerts",    label:"Alerts",     icon:"🔔" },
   { id:"advisor",   label:"AI Advisor", icon:"🎯" },
@@ -1367,6 +1637,7 @@ export default function BettorOdds() {
 
         {nav === "odds" && selected && <EventDetail event={selected} onBack={()=>setSelected(null)} />}
         {nav === "arb"      && <ArbFinder events={events} />}
+        {nav === "parlay"   && <ParlayTool events={events} />}
         {nav === "movement" && <LineMovement events={events} />}
         {nav === "alerts"   && <Alerts events={events} />}
         {nav === "advisor"  && <AIAdvisor events={events} />}
