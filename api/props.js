@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   const { sport, eventId } = req.query;
   if (!sport || !eventId) return res.status(400).json({ error: 'Missing sport or eventId' });
 
-  const API_KEY = '2e7f79219669f2c22384183e68d8fea3';
+  const API_KEY = 'c997825601b7e1e9975c1f46caae0d6d';
   const BOOKS = 'draftkings,fanduel,betmgm,caesars,bet365,espnbet,pointsbetus,hardrockbet';
 
   // Player prop markets by sport
