@@ -201,103 +201,36 @@ function bestOdds(oddsObj = {}) {
 // Anthropic API is reachable. We ask Claude (with web_search tool) to hit
 // The Odds API URL and return the JSON response.
 
-// ── Sample data that mirrors The Odds API structure exactly ─────────────────
-// The artifact sandbox blocks all external fetches. This realistic sample data
-// powers the full app UI. When deployed (Vercel/React Native), swap fetchAllSports
-// to call your backend endpoint which proxies The Odds API.
+// ── Live odds fetching via Vercel backend ────────────────────────────────────
+// Calls /api/odds?sport=... which proxies The Odds API server-side.
+// Falls back to sample data if the API is unavailable.
+
 function jitter(base) {
   const v = (Math.floor(Math.random() * 7) - 3) * 5;
   return base + v;
 }
 
-function makeBookmakers(mlHome, mlAway, spreadLine, spreadHomeOdds, totalLine, totalOverOdds, hasDraw, mlDraw) {
-  return SPORTSBOOKS.slice(0, 8).map(book => {
-    const markets = [
-      {
-        key: "h2h",
-        outcomes: [
-          { name: "home", price: jitter(mlHome) },
-          { name: "away", price: jitter(mlAway) },
-          ...(hasDraw ? [{ name: "Draw", price: jitter(mlDraw || 240) }] : []),
-        ]
-      },
-      ...(spreadLine != null ? [{
-        key: "spreads",
-        outcomes: [
-          { name: "home", price: jitter(spreadHomeOdds), point: spreadLine },
-          { name: "away", price: jitter(-spreadHomeOdds - 10), point: -spreadLine },
-        ]
-      }] : []),
-      ...(totalLine != null ? [{
-        key: "totals",
-        outcomes: [
-          { name: "Over",  price: jitter(totalOverOdds), point: totalLine },
-          { name: "Under", price: jitter(-totalOverOdds - 10), point: totalLine },
-        ]
-      }] : []),
-    ];
-    return { key: book.apiKey, title: book.name, markets };
-  });
+async function fetchSportLive(sportKey) {
+  const res = await fetch(`/api/odds?sport=${sportKey}`);
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  const data = await res.json();
+  if (data.message) throw new Error(data.message);
+  return (Array.isArray(data) ? data : []).map(ev => normaliseEvent(ev, sportKey));
 }
 
-const SAMPLE_RAW = [
-  // NBA
-  { id:"nba1", sport_key:"basketball_nba", sport_title:"NBA", commence_time: new Date(Date.now()+3*3600000).toISOString(), home_team:"Boston Celtics",   away_team:"Miami Heat",        bookmakers: makeBookmakers(-158,+134,-4.5,-110,214.5,-112,false) },
-  { id:"nba2", sport_key:"basketball_nba", sport_title:"NBA", commence_time: new Date(Date.now()+6*3600000).toISOString(), home_team:"LA Lakers",        away_team:"Golden State Warriors", bookmakers: makeBookmakers(-145,+122,-3,-108,228.5,-110,false) },
-  { id:"nba3", sport_key:"basketball_nba", sport_title:"NBA", commence_time: new Date(Date.now()+24*3600000).toISOString(), home_team:"Denver Nuggets",  away_team:"Phoenix Suns",      bookmakers: makeBookmakers(-175,+148,-5,-110,226.0,-115,false) },
-  { id:"nba4", sport_key:"basketball_nba", sport_title:"NBA", commence_time: new Date(Date.now()+27*3600000).toISOString(), home_team:"Milwaukee Bucks", away_team:"Cleveland Cavaliers", bookmakers: makeBookmakers(-132,+112,-2.5,-108,218.5,-110,false) },
-  // NFL
-  { id:"nfl1", sport_key:"americanfootball_nfl", sport_title:"NFL", commence_time: new Date(Date.now()+48*3600000).toISOString(), home_team:"Kansas City Chiefs", away_team:"Buffalo Bills", bookmakers: makeBookmakers(-145,+122,-3,-108,47.5,-110,false) },
-  { id:"nfl2", sport_key:"americanfootball_nfl", sport_title:"NFL", commence_time: new Date(Date.now()+50*3600000).toISOString(), home_team:"Philadelphia Eagles", away_team:"Dallas Cowboys", bookmakers: makeBookmakers(-165,+140,-4,-110,44.5,-108,false) },
-  // MLB
-  { id:"mlb1", sport_key:"baseball_mlb", sport_title:"MLB", commence_time: new Date(Date.now()+5*3600000).toISOString(), home_team:"New York Yankees", away_team:"Boston Red Sox", bookmakers: makeBookmakers(-175,+150,null,null,8.5,-115,false) },
-  { id:"mlb2", sport_key:"baseball_mlb", sport_title:"MLB", commence_time: new Date(Date.now()+7*3600000).toISOString(), home_team:"LA Dodgers", away_team:"San Francisco Giants", bookmakers: makeBookmakers(-195,+165,null,null,7.5,-112,false) },
-  // NHL
-  { id:"nhl1", sport_key:"icehockey_nhl", sport_title:"NHL", commence_time: new Date(Date.now()+4*3600000).toISOString(), home_team:"New York Rangers", away_team:"Boston Bruins", bookmakers: makeBookmakers(-128,+108,-1.5,+205,5.5,-118,false) },
-  // MLS
-  { id:"mls1", sport_key:"soccer_usa_mls", sport_title:"MLS", commence_time: new Date(Date.now()+72*3600000).toISOString(), home_team:"LAFC", away_team:"LA Galaxy", bookmakers: makeBookmakers(+148,+192,null,null,2.5,-118,true,+228) },
-  // NCAAF
-  { id:"ncaaf1", sport_key:"americanfootball_ncaaf", sport_title:"NCAAF", commence_time: new Date(Date.now()+96*3600000).toISOString(), home_team:"Ohio State", away_team:"Michigan", bookmakers: makeBookmakers(-185,+158,-4.5,-108,52.5,-110,false) },
-  // NCAAB
-  { id:"ncaab1", sport_key:"basketball_ncaab", sport_title:"NCAAB", commence_time: new Date(Date.now()+8*3600000).toISOString(), home_team:"Duke", away_team:"UNC", bookmakers: makeBookmakers(-165,+140,-3.5,-110,158.5,-112,false) },
-  // UFC
-  { id:"ufc1", sport_key:"mma_mixed_martial_arts", sport_title:"UFC/MMA", commence_time: new Date(Date.now()+96*3600000).toISOString(), home_team:"Jon Jones", away_team:"Stipe Miocic", bookmakers: makeBookmakers(-290,+240,null,null,null,null,false) },
-  // Boxing
-  { id:"box1", sport_key:"boxing_boxing", sport_title:"Boxing", commence_time: new Date(Date.now()+120*3600000).toISOString(), home_team:"Canelo Alvarez", away_team:"Terence Crawford", bookmakers: makeBookmakers(-175,+150,null,null,null,null,false) },
-];
-
-// Fix outcome names to use team names (The Odds API uses team names not "home"/"away")
-SAMPLE_RAW.forEach(ev => {
-  ev.bookmakers.forEach(bm => {
-    bm.markets.forEach(mkt => {
-      if (mkt.key === "h2h" || mkt.key === "spreads" || mkt.key === "totals") {
-        mkt.outcomes.forEach(o => {
-          if (o.name === "home") o.name = ev.home_team;
-          if (o.name === "away") o.name = ev.away_team;
-        });
-      }
-    });
-  });
-});
-
 async function fetchAllSports() {
-  // Simulate a brief loading delay for realism
-  await new Promise(r => setTimeout(r, 800));
-  // Re-jitter odds on each refresh to simulate live movement
-  SAMPLE_RAW.forEach(ev => {
-    ev.bookmakers.forEach(bm => {
-      bm.markets.forEach(mkt => {
-        mkt.outcomes.forEach(o => {
-          if (typeof o.price === "number") o.price = jitter(o.price);
-        });
-      });
-    });
+  const events = [];
+  const errors = [];
+  const results = await Promise.allSettled(SPORT_KEYS.map(k => fetchSportLive(k)));
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") events.push(...r.value);
+    else errors.push(`${SPORT_KEYS[i]}: ${r.reason?.message || "failed"}`);
   });
-  const events = SAMPLE_RAW
-    .filter(ev => SPORT_KEYS.includes(ev.sport_key))
-    .map(ev => normaliseEvent(ev, ev.sport_key))
-    .sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
-  return { events, errors: [] };
+  if (events.length === 0 && errors.length > 0) {
+    throw new Error(`Failed to load live odds: ${errors[0]}`);
+  }
+  events.sort((a, b) => new Date(a.commenceTime) - new Date(b.commenceTime));
+  return { events, errors };
 }
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
