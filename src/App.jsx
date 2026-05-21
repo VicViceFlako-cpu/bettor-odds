@@ -202,8 +202,6 @@ function bestOdds(oddsObj = {}) {
 // The Odds API URL and return the JSON response.
 
 // ── Live odds fetching via Vercel backend ────────────────────────────────────
-// Calls /api/odds?sport=... which proxies The Odds API server-side.
-// Falls back to sample data if the API is unavailable.
 
 function jitter(base) {
   const v = (Math.floor(Math.random() * 7) - 3) * 5;
@@ -216,6 +214,41 @@ async function fetchSportLive(sportKey) {
   const data = await res.json();
   if (data.message) throw new Error(data.message);
   return (Array.isArray(data) ? data : []).map(ev => normaliseEvent(ev, sportKey));
+}
+
+// Player props: fetch for a specific event
+async function fetchPlayerProps(sportKey, eventId) {
+  try {
+    const res = await fetch(`/api/props?sport=${sportKey}&eventId=${eventId}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    // data[0] is the event with bookmakers containing prop markets
+    const ev = data[0];
+    const props = {};
+    (ev.bookmakers || []).forEach(bm => {
+      const book = SPORTSBOOKS.find(b => b.apiKey === bm.key);
+      if (!book) return;
+      (bm.markets || []).forEach(mkt => {
+        // mkt.key looks like "player_points", "player_rebounds", etc.
+        const propKey = mkt.key;
+        if (!props[propKey]) props[propKey] = { label: propKey.replace("player_","").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()), outcomes: {} };
+        mkt.outcomes.forEach(o => {
+          const key = `${o.name}__${o.description || o.name}__${o.point ?? ""}`;
+          if (!props[propKey].outcomes[key]) {
+            props[propKey].outcomes[key] = {
+              player: o.description || o.name,
+              type: o.name, // Over/Under
+              line: o.point,
+              books: {}
+            };
+          }
+          props[propKey].outcomes[key].books[book.apiKey] = o.price;
+        });
+      });
+    });
+    return props;
+  } catch { return null; }
 }
 
 async function fetchAllSports() {
@@ -356,6 +389,10 @@ function OddsRow({ label, oddsObj, onBookClick }) {
 
 function EventDetail({ event, onBack }) {
   const [market, setMarket] = useState("h2h");
+  const [props, setProps] = useState(null);
+  const [propsLoading, setPropsLoading] = useState(false);
+  const [propType, setPropType] = useState(null);
+  const [propSearch, setPropSearch] = useState("");
   const bm = event.bookMap;
   const hasSpreads = !!bm.spreads;
   const hasTotals  = !!bm.totals;
@@ -365,18 +402,35 @@ function EventDetail({ event, onBack }) {
     { id:"h2h", label:"Moneyline" },
     ...(hasSpreads ? [{ id:"spreads", label:"Spread" }] : []),
     ...(hasTotals  ? [{ id:"totals",  label:"Total"  }] : []),
+    { id:"props", label:"🏅 Player Props" },
   ];
 
   function openBook(book) { trackAndOpen(book, "odds-grid"); }
 
-  // compute best for hero display
   const homeBest = bestOdds(bm.h2h?.home || {});
   const awayBest = bestOdds(bm.h2h?.away || {});
-
-  // spread line (take first available)
   const spreadHomeLine = bm.spreads?.home_line ? Object.values(bm.spreads.home_line)[0] : null;
   const spreadAwayLine = bm.spreads?.away_line ? Object.values(bm.spreads.away_line)[0] : null;
   const totalLine      = bm.totals?.over_line  ? Object.values(bm.totals.over_line)[0]  : null;
+
+  // Load props when tab selected
+  useEffect(() => {
+    if (market !== "props" || props !== null) return;
+    setPropsLoading(true);
+    fetchPlayerProps(event.sportKey, event.id).then(data => {
+      setProps(data || {});
+      const keys = Object.keys(data || {});
+      if (keys.length > 0) setPropType(keys[0]);
+      setPropsLoading(false);
+    });
+  }, [market]);
+
+  // Filter props by search
+  const propTypes = Object.keys(props || {});
+  const activeProp = props?.[propType];
+  const filteredOutcomes = activeProp ? Object.entries(activeProp.outcomes).filter(([k, o]) =>
+    !propSearch || o.player.toLowerCase().includes(propSearch.toLowerCase())
+  ) : [];
 
   return (
     <div className="fade-up">
@@ -389,7 +443,7 @@ function EventDetail({ event, onBack }) {
         </div>
         <div style={{ textAlign:"center", padding:"10px 0" }}>
           <div style={{ fontSize:22, fontWeight:800, color:C.text }}>{event.away}</div>
-          <div style={{ fontSize:12, color:C.faint, margin:"8px 0" }}>@ </div>
+          <div style={{ fontSize:12, color:C.faint, margin:"8px 0" }}>@</div>
           <div style={{ fontSize:22, fontWeight:800, color:C.text }}>{event.home}</div>
         </div>
         {(homeBest.best || awayBest.best) && (
@@ -428,6 +482,94 @@ function EventDetail({ event, onBack }) {
             <OddsRow label={`Over ${totalLine ?? ""}`}  oddsObj={bm.totals?.over}  onBookClick={openBook} />
             <OddsRow label={`Under ${totalLine ?? ""}`} oddsObj={bm.totals?.under} onBookClick={openBook} />
           </>
+        )}
+
+        {market === "props" && (
+          <div>
+            {propsLoading && (
+              <div style={{ textAlign:"center", padding:"32px 0" }}>
+                <div style={{ display:"inline-block", width:24, height:24, border:`3px solid ${C.border}`, borderTopColor:C.accent, borderRadius:"50%", animation:"spin 0.7s linear infinite", marginBottom:12 }} />
+                <div style={{ fontSize:13, color:C.muted }}>Loading player props…</div>
+              </div>
+            )}
+
+            {!propsLoading && propTypes.length === 0 && (
+              <div style={{ textAlign:"center", padding:"32px 0" }}>
+                <div style={{ fontSize:32, marginBottom:12 }}>🏅</div>
+                <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:8 }}>No props available yet</div>
+                <div style={{ fontSize:13, color:C.muted }}>Player props typically appear 1–2 days before game time. Check back closer to tip-off.</div>
+              </div>
+            )}
+
+            {!propsLoading && propTypes.length > 0 && (
+              <>
+                {/* Prop type selector */}
+                <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:12, marginBottom:16 }}>
+                  {propTypes.map(pt => (
+                    <Pill key={pt} active={propType===pt} onClick={()=>{ setPropType(pt); setPropSearch(""); }}>
+                      {props[pt].label}
+                    </Pill>
+                  ))}
+                </div>
+
+                {/* Player search */}
+                <input
+                  value={propSearch}
+                  onChange={e=>setPropSearch(e.target.value)}
+                  placeholder="🔍 Search player name..."
+                  style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:16, background:"#F9FAFB" }}
+                />
+
+                {/* Props list */}
+                <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+                  {filteredOutcomes.map(([key, outcome]) => {
+                    const overBooks = {};
+                    const underBooks = {};
+                    Object.entries(outcome.books).forEach(([bookId, price]) => {
+                      // Separate over/under if available, otherwise just show all
+                      if (outcome.type === "Over") overBooks[bookId] = price;
+                      else if (outcome.type === "Under") underBooks[bookId] = price;
+                      else overBooks[bookId] = price;
+                    });
+                    const bestOver = bestOdds(overBooks);
+                    const bestUnder = bestOdds(underBooks);
+
+                    return (
+                      <div key={key} style={{ borderBottom:`1px solid ${C.border}`, paddingBottom:16 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.player}</div>
+                            {outcome.line != null && (
+                              <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
+                                {props[propType]?.label} · Line: <strong>{outcome.line}</strong>
+                              </div>
+                            )}
+                          </div>
+                          {bestOver.book && (
+                            <Badge color={bestOver.book.color} bg={`${bestOver.book.color}15`}>
+                              Best: {fmtAmerican(bestOver.best)} {bestOver.book.short}
+                            </Badge>
+                          )}
+                        </div>
+                        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                          {SPORTSBOOKS.map(book => {
+                            const odds = overBooks[book.apiKey] ?? underBooks[book.apiKey] ?? null;
+                            const isBest = book.apiKey === bestOver.apiKey || book.apiKey === bestUnder.apiKey;
+                            return (
+                              <BookChip key={book.apiKey} book={book} odds={odds} isBest={isBest && odds != null} onClick={() => trackAndOpen(book, "props")} />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {filteredOutcomes.length === 0 && propSearch && (
+                    <div style={{ textAlign:"center", padding:"20px 0", color:C.faint, fontSize:13 }}>No players found for "{propSearch}"</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 
