@@ -1,5 +1,128 @@
 import { useState, useEffect, useRef } from "react";
 
+// ─── PRO SUBSCRIPTION ────────────────────────────────────────────────────────
+
+const PRO_PRICE = "$4.99";
+const PRO_FEATURES = [
+  { icon:"🎰", label:"Parlay Comparison", desc:"Compare payouts across all books" },
+  { icon:"💰", label:"Arbitrage Finder",  desc:"Real-time guaranteed profit alerts" },
+  { icon:"📈", label:"Line Movement",     desc:"Track odds shifts as they happen" },
+  { icon:"🔔", label:"Line Alerts",       desc:"Get notified when odds hit your target" },
+  { icon:"🎯", label:"AI Advisor",        desc:"Unlimited AI betting analysis" },
+  { icon:"🏅", label:"Player Props",      desc:"Best odds across all books on any prop" },
+];
+const TRIAL_DAYS = 7;
+const PRO_NAV_IDS = ["parlay","arb","movement","alerts","advisor"];
+
+// Check/set trial in localStorage
+function getProStatus() {
+  try {
+    const raw = localStorage.getItem("bo_pro");
+    if (!raw) return { status: "none" }; // never started
+    return JSON.parse(raw);
+  } catch { return { status: "none" }; }
+}
+
+function setProStatus(status) {
+  try { localStorage.setItem("bo_pro", JSON.stringify(status)); } catch {}
+}
+
+function startTrial() {
+  const expires = Date.now() + TRIAL_DAYS * 86400000;
+  setProStatus({ status:"trial", expires, started: Date.now() });
+}
+
+function isProActive() {
+  const s = getProStatus();
+  if (s.status === "active") return true;
+  if (s.status === "trial" && s.expires > Date.now()) return true;
+  return false;
+}
+
+function daysLeftInTrial() {
+  const s = getProStatus();
+  if (s.status !== "trial") return 0;
+  return Math.max(0, Math.ceil((s.expires - Date.now()) / 86400000));
+}
+
+// ─── PAYWALL MODAL ────────────────────────────────────────────────────────────
+
+function ProModal({ onClose, onStartTrial, onUpgrade, trialUsed }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:C.surface, borderRadius:20, padding:28, width:"100%", maxWidth:400, maxHeight:"90vh", overflowY:"auto" }}>
+
+        {/* Header */}
+        <div style={{ textAlign:"center", marginBottom:24 }}>
+          <div style={{ fontSize:40, marginBottom:8 }}>🎯</div>
+          <div style={{ fontSize:22, fontWeight:800, color:C.text, marginBottom:4 }}>Bettor Odds Pro</div>
+          <div style={{ fontSize:14, color:C.muted }}>The sharpest edge in sports betting</div>
+        </div>
+
+        {/* Price */}
+        <div style={{ background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", borderRadius:14, padding:"16px 20px", marginBottom:20, textAlign:"center" }}>
+          <div style={{ fontSize:32, fontWeight:800, color:"#fff" }}>{PRO_PRICE}<span style={{ fontSize:16, fontWeight:500 }}>/mo</span></div>
+          {!trialUsed && <div style={{ fontSize:13, color:"rgba(255,255,255,0.8)", marginTop:4 }}>Start with {TRIAL_DAYS}-day free trial · Cancel anytime</div>}
+        </div>
+
+        {/* Features */}
+        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:24 }}>
+          {PRO_FEATURES.map((f, i) => (
+            <div key={i} style={{ display:"flex", alignItems:"center", gap:12 }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:C.accentBg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>{f.icon}</div>
+              <div>
+                <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{f.label}</div>
+                <div style={{ fontSize:12, color:C.muted }}>{f.desc}</div>
+              </div>
+              <div style={{ marginLeft:"auto", color:C.green, fontSize:18 }}>✓</div>
+            </div>
+          ))}
+        </div>
+
+        {/* CTA buttons */}
+        {!trialUsed ? (
+          <>
+            <button onClick={onStartTrial} className="btn" style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", color:"#fff", fontSize:16, fontWeight:700, marginBottom:10, borderRadius:12 }}>
+              Start {TRIAL_DAYS}-Day Free Trial
+            </button>
+            <button onClick={onUpgrade} className="btn" style={{ width:"100%", padding:"12px", background:"#F3F4F6", color:C.muted, fontSize:14, borderRadius:12 }}>
+              Subscribe Now — {PRO_PRICE}/mo
+            </button>
+          </>
+        ) : (
+          <button onClick={onUpgrade} className="btn" style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", color:"#fff", fontSize:16, fontWeight:700, borderRadius:12 }}>
+            Upgrade to Pro — {PRO_PRICE}/mo
+          </button>
+        )}
+
+        <div style={{ textAlign:"center", marginTop:12, fontSize:11, color:C.faint }}>
+          Secure payment · Cancel anytime · No hidden fees
+        </div>
+
+        <button onClick={onClose} style={{ display:"block", width:"100%", background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:13, marginTop:12, padding:8 }}>
+          Maybe later
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── PRO BANNER ───────────────────────────────────────────────────────────────
+
+function TrialBanner({ daysLeft, onUpgrade }) {
+  if (daysLeft <= 0) return null;
+  return (
+    <div style={{ background:"linear-gradient(135deg, #1B5EFF22, #7C3AED22)", border:"1px solid #1B5EFF44", borderRadius:10, padding:"10px 14px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+      <div style={{ fontSize:13, color:C.accent, fontWeight:600 }}>
+        ⏱ {daysLeft} day{daysLeft!==1?"s":""} left in your free trial
+      </div>
+      <button onClick={onUpgrade} className="btn" style={{ padding:"6px 12px", background:C.accent, color:"#fff", fontSize:12 }}>
+        Upgrade
+      </button>
+    </div>
+  );
+}
+
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 
 const ODDS_API_KEY = "c997825601b7e1e9975c1f46caae0d6d"; // Used when deployed with real backend
@@ -1832,7 +1955,47 @@ export default function BettorOdds() {
   const [quota, setQuota]         = useState({ remaining: null, used: null });
   const [lastRefresh, setLastRefresh] = useState(null);
   const [debugLog, setDebugLog]   = useState([]);
-  const [showDebug, setShowDebug] = useState(false); // hidden by default in production
+  const [showDebug, setShowDebug] = useState(false);
+
+  // Pro subscription state
+  const [proStatus, setProStatusState] = useState(() => getProStatus());
+  const [showProModal, setShowProModal] = useState(false);
+  const [pendingNav, setPendingNav]     = useState(null);
+
+  const isPro        = isProActive();
+  const trialDays    = daysLeftInTrial();
+  const trialUsed    = proStatus.status !== "none";
+  const STRIPE_URL   = "https://buy.stripe.com/your_link_here"; // Replace with real Stripe link
+
+  function handleStartTrial() {
+    startTrial();
+    setProStatusState(getProStatus());
+    setShowProModal(false);
+    if (pendingNav) { setNav(pendingNav); setPendingNav(null); }
+  }
+
+  function handleUpgrade() {
+    window.open(STRIPE_URL, "_blank");
+    setShowProModal(false);
+  }
+
+  function handleNavClick(id) {
+    if (PRO_NAV_IDS.includes(id) && !isPro) {
+      setPendingNav(id);
+      setShowProModal(true);
+      return;
+    }
+    setNav(id);
+    setSelected(null);
+  }
+
+  // Check if trial expired on mount
+  useEffect(() => {
+    const s = getProStatus();
+    if (s.status === "trial" && s.expires < Date.now()) {
+      setProStatusState({ ...s, status: "expired" });
+    }
+  }, []);
 
   async function loadOdds() {
     setLoading(true);
@@ -1873,7 +2036,7 @@ export default function BettorOdds() {
     return matchSport && matchSearch;
   });
 
-  function switchNav(id) { setNav(id); setSelected(null); }
+  function switchNav(id) { handleNavClick(id); }
 
   return (
     <div style={{ fontFamily:"'Figtree',sans-serif", background:C.bg, minHeight:"100vh" }}>
@@ -1899,17 +2062,34 @@ export default function BettorOdds() {
             </div>
           </div>
           <div style={{ display:"flex", gap:2, overflowX:"auto" }}>
-            {NAV.map(n => (
-              <button key={n.id} onClick={()=>switchNav(n.id)} className="btn" style={{ padding:"10px 14px", background:"none", color:nav===n.id?C.accent:C.muted, fontSize:13, fontWeight:nav===n.id?700:500, borderRadius:0, borderBottom:`2.5px solid ${nav===n.id?C.accent:"transparent"}`, whiteSpace:"nowrap" }}>
-                {n.icon} {n.label}
-              </button>
-            ))}
+            {NAV.map(n => {
+              const isLocked = PRO_NAV_IDS.includes(n.id) && !isPro;
+              return (
+                <button key={n.id} onClick={()=>handleNavClick(n.id)} className="btn" style={{ padding:"10px 14px", background:"none", color:nav===n.id?C.accent:C.muted, fontSize:13, fontWeight:nav===n.id?700:500, borderRadius:0, borderBottom:`2.5px solid ${nav===n.id?C.accent:"transparent"}`, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:4 }}>
+                  {n.icon} {n.label} {isLocked && <span style={{ fontSize:9, color:C.amber }}>PRO</span>}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
+      {/* Pro Modal */}
+      {showProModal && (
+        <ProModal
+          onClose={()=>{ setShowProModal(false); setPendingNav(null); }}
+          onStartTrial={handleStartTrial}
+          onUpgrade={handleUpgrade}
+          trialUsed={trialUsed}
+        />
+      )}
+
       {/* Body */}
       <div style={{ maxWidth:1100, margin:"0 auto", padding:"24px 20px" }}>
+        {/* Trial banner */}
+        {isPro && trialDays > 0 && trialDays <= 3 && (
+          <TrialBanner daysLeft={trialDays} onUpgrade={handleUpgrade} />
+        )}
 
         {/* ODDS */}
         {nav === "odds" && !selected && (
@@ -1969,7 +2149,20 @@ export default function BettorOdds() {
         {nav === "alerts"   && <Alerts events={events} />}
         {nav === "advisor"  && <AIAdvisor events={events} />}
         {nav === "books"    && <SportsbooksPage />}
-        {nav === "revenue"  && <RevenueDashboard />}
+        {nav === "revenue"  && (
+          <>
+            {!isPro && (
+              <div style={{ background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", borderRadius:14, padding:"20px 24px", marginBottom:20, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontSize:16, fontWeight:800, color:"#fff", marginBottom:4 }}>Upgrade to Bettor Odds Pro</div>
+                  <div style={{ fontSize:13, color:"rgba(255,255,255,0.8)" }}>Unlock all features · {PRO_PRICE}/month</div>
+                </div>
+                <button onClick={()=>setShowProModal(true)} className="btn" style={{ padding:"10px 18px", background:"#fff", color:C.accent, fontSize:13, fontWeight:700, flexShrink:0 }}>Upgrade</button>
+              </div>
+            )}
+            <RevenueDashboard />
+          </>
+        )}
       </div>
 
       <div style={{ borderTop:`1px solid ${C.border}`, background:C.surface, padding:"16px 20px", textAlign:"center" }}>
