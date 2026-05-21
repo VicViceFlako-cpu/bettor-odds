@@ -18,18 +18,42 @@ const SPORT_CONFIG = {
   "boxing_boxing":              { label: "Boxing", icon: "🥊", id: "boxing" },
 };
 
-// NBA first so it always loads — free tier hits rate limits on later sports
-const SPORT_KEYS = [
-  "basketball_nba",
-  "americanfootball_nfl",
-  "baseball_mlb",
-  "icehockey_nhl",
-  "soccer_usa_mls",
-  "basketball_ncaab",
-  "americanfootball_ncaaf",
-  "mma_mixed_martial_arts",
-  "boxing_boxing",
-];
+// Dynamically prioritize in-season sports based on current month
+function getSeasonalSportKeys() {
+  const month = new Date().getMonth() + 1; // 1-12
+
+  // Define which sports are in season by month
+  const inSeason = [];
+  const offSeason = [];
+
+  const check = (key, months) => {
+    if (months.includes(month)) inSeason.push(key);
+    else offSeason.push(key);
+  };
+
+  // NBA: Oct-Jun (playoffs through June)
+  check("basketball_nba",         [10,11,12,1,2,3,4,5,6]);
+  // MLB: Apr-Oct
+  check("baseball_mlb",           [4,5,6,7,8,9,10]);
+  // NHL: Oct-Jun
+  check("icehockey_nhl",          [10,11,12,1,2,3,4,5,6]);
+  // NFL: Sep-Feb
+  check("americanfootball_nfl",   [9,10,11,12,1,2]);
+  // MLS: Feb-Nov
+  check("soccer_usa_mls",         [2,3,4,5,6,7,8,9,10,11]);
+  // NCAAB: Nov-Apr (March Madness peak)
+  check("basketball_ncaab",       [11,12,1,2,3,4]);
+  // NCAAF: Aug-Jan
+  check("americanfootball_ncaaf", [8,9,10,11,12,1]);
+  // UFC & Boxing: year-round
+  check("mma_mixed_martial_arts", [1,2,3,4,5,6,7,8,9,10,11,12]);
+  check("boxing_boxing",          [1,2,3,4,5,6,7,8,9,10,11,12]);
+
+  // In-season sports first, then off-season (in case quota allows)
+  return [...inSeason, ...offSeason];
+}
+
+const SPORT_KEYS = getSeasonalSportKeys();
 
 const SPORT_NAV = [
   { id: "all",    label: "All",     icon: "🏆" },
@@ -1224,6 +1248,10 @@ function ParlayTool({ events }) {
   const [selectedEvent, setSelectedEventForLeg] = useState(null);
   const [legMarket, setLegMarket] = useState("h2h");
   const [legOutcome, setLegOutcome] = useState(null);
+  const [parlayProps, setParlayProps] = useState(null);
+  const [parlayPropsLoading, setParlayPropsLoading] = useState(false);
+  const [parlayPropType, setParlayPropType] = useState(null);
+  const [parlayPropSearch, setParlayPropSearch] = useState("");
 
   // Convert american to decimal
   function toDecimal(american) {
@@ -1313,7 +1341,24 @@ function ParlayTool({ events }) {
     { id:"h2h", label:"Moneyline" },
     ...(selectedEvent?.bookMap?.spreads ? [{ id:"spreads", label:"Spread" }] : []),
     ...(selectedEvent?.bookMap?.totals  ? [{ id:"totals",  label:"Total"  }] : []),
+    { id:"props", label:"🏅 Props" },
   ];
+
+  // Load props when props tab selected in parlay builder
+  useEffect(() => {
+    if (legMarket !== "props" || !selectedEvent || parlayProps !== null) return;
+    setParlayPropsLoading(true);
+    setParlayProps(null);
+    fetchPlayerProps(selectedEvent.sportKey, selectedEvent.id).then(data => {
+      setParlayProps(data || {});
+      const keys = Object.keys(data || {});
+      if (keys.length > 0) setParlayPropType(keys[0]);
+      setParlayPropsLoading(false);
+    }).catch(() => {
+      setParlayProps({});
+      setParlayPropsLoading(false);
+    });
+  }, [legMarket, selectedEvent]);
 
   return (
     <div className="fade-up">
@@ -1388,27 +1433,100 @@ function ParlayTool({ events }) {
 
             {selectedEvent && (
               <>
-                <button onClick={() => setSelectedEventForLeg(null)} style={{ background:"none", border:"none", cursor:"pointer", color:C.accent, fontSize:13, padding:"0 0 12px 0" }}>← Back to games</button>
+                <button onClick={() => { setSelectedEventForLeg(null); setParlayProps(null); setParlayPropType(null); }} style={{ background:"none", border:"none", cursor:"pointer", color:C.accent, fontSize:13, padding:"0 0 12px 0" }}>← Back to games</button>
                 <div style={{ display:"flex", gap:8, marginBottom:16, overflowX:"auto" }}>
-                  {markets.map(m => <Pill key={m.id} active={legMarket===m.id} onClick={()=>setLegMarket(m.id)}>{m.label}</Pill>)}
+                  {markets.map(m => <Pill key={m.id} active={legMarket===m.id} onClick={()=>{ setLegMarket(m.id); if (m.id !== "props") { setParlayProps(null); } }}>{m.label}</Pill>)}
                 </div>
-                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                  {getOutcomes(selectedEvent, legMarket).map(outcome => {
-                    const best = bestOdds(outcome.oddsMap);
-                    const alreadyAdded = legs.find(l => l.id === `${selectedEvent.id}_${outcome.key}`);
-                    return (
-                      <div key={outcome.key} onClick={() => !alreadyAdded && addLeg(selectedEvent, outcome)} style={{ padding:"14px 16px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded ? "default" : "pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                        <div>
-                          <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.label}</div>
-                          {best.book && <div style={{ fontSize:12, color:best.book.color, marginTop:2 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
+
+                {/* Standard markets */}
+                {legMarket !== "props" && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {getOutcomes(selectedEvent, legMarket).map(outcome => {
+                      const best = bestOdds(outcome.oddsMap);
+                      const alreadyAdded = legs.find(l => l.id === `${selectedEvent.id}_${outcome.key}`);
+                      return (
+                        <div key={outcome.key} onClick={() => !alreadyAdded && addLeg(selectedEvent, outcome)} style={{ padding:"14px 16px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded ? "default" : "pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.label}</div>
+                            {best.book && <div style={{ fontSize:12, color:best.book.color, marginTop:2 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
+                          </div>
+                          <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent }}>
+                            {alreadyAdded ? "✓ Added" : "+ Add"}
+                          </div>
                         </div>
-                        <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent }}>
-                          {alreadyAdded ? "✓ Added" : "+ Add"}
-                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Player props market */}
+                {legMarket === "props" && (
+                  <div>
+                    {parlayPropsLoading && (
+                      <div style={{ textAlign:"center", padding:"24px 0" }}>
+                        <div style={{ display:"inline-block", width:20, height:20, border:`3px solid ${C.border}`, borderTopColor:C.accent, borderRadius:"50%", animation:"spin 0.7s linear infinite", marginBottom:8 }} />
+                        <div style={{ fontSize:13, color:C.muted }}>Loading player props…</div>
                       </div>
-                    );
-                  })}
-                </div>
+                    )}
+                    {!parlayPropsLoading && Object.keys(parlayProps || {}).length === 0 && (
+                      <div style={{ textAlign:"center", padding:"24px 0", color:C.faint, fontSize:13 }}>
+                        <div style={{ fontSize:28, marginBottom:8 }}>🏅</div>
+                        Props not available yet for this game.<br/>Check back closer to tip-off, or upgrade your Odds API plan.
+                      </div>
+                    )}
+                    {!parlayPropsLoading && Object.keys(parlayProps || {}).length > 0 && (
+                      <>
+                        {/* Prop type pills */}
+                        <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:12 }}>
+                          {Object.entries(parlayProps).map(([pt, pd]) => (
+                            <Pill key={pt} active={parlayPropType===pt} onClick={()=>{ setParlayPropType(pt); setParlayPropSearch(""); }}>
+                              {pd.label}
+                            </Pill>
+                          ))}
+                        </div>
+                        {/* Player search */}
+                        <input
+                          value={parlayPropSearch}
+                          onChange={e=>setParlayPropSearch(e.target.value)}
+                          placeholder="🔍 Search player..."
+                          style={{ width:"100%", padding:"8px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:10 }}
+                        />
+                        {/* Prop outcomes */}
+                        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                          {Object.entries(parlayProps[parlayPropType]?.outcomes || {})
+                            .filter(([k, o]) => !parlayPropSearch || o.player.toLowerCase().includes(parlayPropSearch.toLowerCase()))
+                            .map(([key, outcome]) => {
+                              const best = bestOdds(outcome.books);
+                              const legId = `${selectedEvent.id}_prop_${key}`;
+                              const alreadyAdded = legs.find(l => l.id === legId);
+                              const propLabel = `${outcome.player} ${outcome.type}${outcome.line != null ? ` ${outcome.line}` : ""} ${parlayProps[parlayPropType]?.label || ""}`;
+                              return (
+                                <div key={key} onClick={() => {
+                                  if (alreadyAdded) return;
+                                  addLeg(selectedEvent, {
+                                    label: propLabel,
+                                    key: `prop_${key}`,
+                                    oddsMap: outcome.books,
+                                  });
+                                }} style={{ padding:"12px 14px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded ? "default" : "pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                                  <div style={{ minWidth:0, flex:1 }}>
+                                    <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{outcome.player}</div>
+                                    <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>
+                                      {outcome.type}{outcome.line != null ? ` ${outcome.line}` : ""} · {parlayProps[parlayPropType]?.label}
+                                    </div>
+                                    {best.book && <div style={{ fontSize:11, color:best.book.color, marginTop:1 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
+                                  </div>
+                                  <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent, flexShrink:0, marginLeft:8 }}>
+                                    {alreadyAdded ? "✓ Added" : "+ Add"}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1484,8 +1602,8 @@ function ParlayTool({ events }) {
 
 const NAV = [
   { id:"odds",      label:"Odds",       icon:"📊" },
-  { id:"arb",       label:"Arb Finder", icon:"💰" },
   { id:"parlay",    label:"Parlay",     icon:"🎰" },
+  { id:"arb",       label:"Arb Finder", icon:"💰" },
   { id:"movement",  label:"Movement",   icon:"📈" },
   { id:"alerts",    label:"Alerts",     icon:"🔔" },
   { id:"advisor",   label:"AI Advisor", icon:"🎯" },
