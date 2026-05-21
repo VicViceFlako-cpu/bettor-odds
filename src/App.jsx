@@ -1331,17 +1331,26 @@ function SportsbooksPage() {
 function ParlayTool({ events }) {
   const [legs, setLegs] = useState([]);
   const [stake, setStake] = useState("100");
+  const [mode, setMode] = useState("build"); // "build" | "props-hub"
+
+  // Props Hub state
+  const [hubLoading, setHubLoading] = useState(false);
+  const [hubLoaded, setHubLoaded] = useState(false);
+  const [hubProps, setHubProps] = useState([]); // flat list of all props
+  const [hubSearch, setHubSearch] = useState("");
+  const [hubCategory, setHubCategory] = useState("All");
+  const [hubSport, setHubSport] = useState("All");
+
+  // Add Leg modal state
   const [showAddLeg, setShowAddLeg] = useState(false);
   const [legSearch, setLegSearch] = useState("");
   const [selectedEvent, setSelectedEventForLeg] = useState(null);
   const [legMarket, setLegMarket] = useState("h2h");
-  const [legOutcome, setLegOutcome] = useState(null);
   const [parlayProps, setParlayProps] = useState(null);
   const [parlayPropsLoading, setParlayPropsLoading] = useState(false);
   const [parlayPropType, setParlayPropType] = useState(null);
   const [parlayPropSearch, setParlayPropSearch] = useState("");
 
-  // Convert american to decimal
   function toDecimal(american) {
     if (!american) return 1;
     const n = parseFloat(american);
@@ -1349,13 +1358,12 @@ function ParlayTool({ events }) {
     return 100 / Math.abs(n) + 1;
   }
 
-  // Calculate parlay payout for a book given legs
   function calcParlay(bookApiKey, legList) {
     if (legList.length < 2) return null;
     let decimal = 1;
     for (const leg of legList) {
       const odds = leg.bookOdds[bookApiKey];
-      if (!odds) return null; // book doesn't have this leg
+      if (!odds) return null;
       decimal *= toDecimal(odds);
     }
     const stakeNum = parseFloat(stake) || 100;
@@ -1364,7 +1372,6 @@ function ParlayTool({ events }) {
     return { decimal: decimal.toFixed(3), payout: payout.toFixed(2), profit: profit.toFixed(2), american: decimal >= 2 ? `+${Math.round((decimal-1)*100)}` : `-${Math.round(100/(decimal-1))}` };
   }
 
-  // Get available outcomes for an event/market
   function getOutcomes(ev, market) {
     const bm = ev.bookMap;
     if (market === "h2h") {
@@ -1375,9 +1382,9 @@ function ParlayTool({ events }) {
       return outs;
     }
     if (market === "spreads") {
-      const outs = [];
       const hl = bm.spreads?.home_line ? Object.values(bm.spreads.home_line)[0] : null;
       const al = bm.spreads?.away_line ? Object.values(bm.spreads.away_line)[0] : null;
+      const outs = [];
       if (bm.spreads?.home) outs.push({ label: `${ev.home} ${hl != null ? fmtAmerican(hl) : ""}`, key:"sp_home", oddsMap: bm.spreads.home });
       if (bm.spreads?.away) outs.push({ label: `${ev.away} ${al != null ? fmtAmerican(al) : ""}`, key:"sp_away", oddsMap: bm.spreads.away });
       return outs;
@@ -1392,8 +1399,7 @@ function ParlayTool({ events }) {
     return [];
   }
 
-  function addLeg(ev, outcome) {
-    // Get best odds across all books for display, store per-book odds
+  function addLeg(ev, outcome, keepModalOpen) {
     const leg = {
       id: `${ev.id}_${outcome.key}`,
       game: `${ev.away} @ ${ev.home}`,
@@ -1402,22 +1408,97 @@ function ParlayTool({ events }) {
       icon: ev.icon,
       bookOdds: outcome.oddsMap,
     };
-    if (legs.find(l => l.id === leg.id)) return; // no dupes
+    if (legs.find(l => l.id === leg.id)) return;
     setLegs(prev => [...prev, leg]);
-    setShowAddLeg(false);
-    setSelectedEventForLeg(null);
-    setLegSearch("");
-    setLegOutcome(null);
+    if (!keepModalOpen) {
+      setShowAddLeg(false);
+      setSelectedEventForLeg(null);
+      setLegSearch("");
+    }
+  }
+
+  function addPropLeg(ev, propKey, outcome, type) {
+    const books = outcome.books;
+    const legId = `${ev.id}_prop_${propKey}_${outcome.player}_${type}`;
+    if (legs.find(l => l.id === legId)) return;
+    const best = bestOdds(books);
+    const leg = {
+      id: legId,
+      game: `${ev.away} @ ${ev.home}`,
+      label: `${outcome.player} ${type} ${outcome.line ?? ""} ${propKey}`,
+      sport: ev.sportLabel,
+      icon: ev.icon,
+      bookOdds: books,
+      isProp: true,
+    };
+    setLegs(prev => [...prev, leg]);
   }
 
   function removeLeg(id) { setLegs(prev => prev.filter(l => l.id !== id)); }
 
-  // Calculate results per book
-  const bookResults = SPORTSBOOKS.map(book => {
-    const result = calcParlay(book.apiKey, legs);
-    return { book, result };
-  }).filter(b => b.result !== null);
+  // ── Props Hub: load props for today's games ──────────────────────────────
+  async function loadPropsHub() {
+    setHubLoading(true);
+    setHubLoaded(false);
+    setHubProps([]);
+    // Only fetch props for in-season sports with games today/tomorrow
+    const todayGames = events.filter(ev => {
+      const d = new Date(ev.commenceTime);
+      const diff = (d - Date.now()) / 3600000;
+      return diff >= -2 && diff <= 48; // within 2hrs past to 48hrs future
+    }).slice(0, 6); // limit to 6 games to save API quota
 
+    const allProps = [];
+    for (const ev of todayGames) {
+      try {
+        const props = await fetchPlayerProps(ev.sportKey, ev.id);
+        if (!props) continue;
+        Object.entries(props).forEach(([propKey, propData]) => {
+          Object.entries(propData.outcomes || {}).forEach(([key, outcome]) => {
+            const bestOver  = outcome.type === "Over"  ? bestOdds(outcome.books) : null;
+            const bestUnder = outcome.type === "Under" ? bestOdds(outcome.books) : null;
+            const best = bestOver || bestUnder;
+            if (!best || !best.best) return;
+            allProps.push({
+              ev, propKey,
+              propLabel: propData.label,
+              propEmoji: propData.emoji || "📊",
+              category: propData.category || "Other",
+              player: outcome.player,
+              type: outcome.type,
+              line: outcome.line,
+              books: outcome.books,
+              bestOdds: best.best,
+              bestBook: best.book,
+              outcomeKey: key,
+              outcome,
+            });
+          });
+        });
+      } catch(e) { /* skip failed games */ }
+    }
+    setHubProps(allProps);
+    setHubLoaded(true);
+    setHubLoading(false);
+  }
+
+  useEffect(() => {
+    if (mode === "props-hub" && !hubLoaded && !hubLoading) loadPropsHub();
+  }, [mode]);
+
+  // Load props in modal when props tab selected
+  useEffect(() => {
+    if (legMarket !== "props" || !selectedEvent || parlayProps !== null) return;
+    setParlayPropsLoading(true);
+    fetchPlayerProps(selectedEvent.sportKey, selectedEvent.id).then(data => {
+      setParlayProps(data || {});
+      const keys = Object.keys(data || {});
+      if (keys.length > 0) setParlayPropType(keys[0]);
+      setParlayPropsLoading(false);
+    }).catch(() => { setParlayProps({}); setParlayPropsLoading(false); });
+  }, [legMarket, selectedEvent]);
+
+  const bookResults = SPORTSBOOKS.map(book => ({ book, result: calcParlay(book.apiKey, legs) })).filter(b => b.result !== null);
   bookResults.sort((a, b) => parseFloat(b.result.profit) - parseFloat(a.result.profit));
   const bestPayout = bookResults[0]?.result?.profit;
 
@@ -1432,85 +1513,262 @@ function ParlayTool({ events }) {
     { id:"props", label:"🏅 Props" },
   ];
 
-  // Load props when props tab selected in parlay builder
-  useEffect(() => {
-    if (legMarket !== "props" || !selectedEvent || parlayProps !== null) return;
-    setParlayPropsLoading(true);
-    setParlayProps(null);
-    fetchPlayerProps(selectedEvent.sportKey, selectedEvent.id).then(data => {
-      setParlayProps(data || {});
-      const keys = Object.keys(data || {});
-      if (keys.length > 0) setParlayPropType(keys[0]);
-      setParlayPropsLoading(false);
-    }).catch(() => {
-      setParlayProps({});
-      setParlayPropsLoading(false);
-    });
-  }, [legMarket, selectedEvent]);
+  // Hub filters
+  const hubCategories = ["All", ...new Set(hubProps.map(p => p.category))];
+  const hubSports = ["All", ...new Set(hubProps.map(p => p.ev.sportLabel))];
+  const filteredHub = hubProps.filter(p => {
+    const matchCat = hubCategory === "All" || p.category === hubCategory;
+    const matchSport = hubSport === "All" || p.ev.sportLabel === hubSport;
+    const matchSearch = !hubSearch || p.player.toLowerCase().includes(hubSearch.toLowerCase());
+    return matchCat && matchSport && matchSearch;
+  });
 
   return (
     <div className="fade-up">
-      <div style={{ marginBottom:20 }}>
-        <h2 style={{ fontSize:22, fontWeight:800, color:C.text, marginBottom:4 }}>Parlay Comparison</h2>
-        <p style={{ fontSize:14, color:C.muted }}>Build a parlay and see which sportsbook pays the most.</p>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:20 }}>
+        <div>
+          <h2 style={{ fontSize:22, fontWeight:800, color:C.text, marginBottom:4 }}>Parlay Comparison</h2>
+          <p style={{ fontSize:14, color:C.muted }}>Build a parlay and see which sportsbook pays the most.</p>
+        </div>
       </div>
 
-      {/* Stake input */}
-      <div className="card" style={{ padding:16, marginBottom:16, display:"flex", alignItems:"center", gap:12 }}>
-        <div style={{ fontSize:13, fontWeight:700, color:C.muted, flexShrink:0 }}>Stake ($)</div>
-        <input
-          value={stake}
-          onChange={e => setStake(e.target.value.replace(/[^0-9.]/g,""))}
-          style={{ flex:1, padding:"8px 12px", borderRadius:8, border:`1.5px solid ${C.border}`, fontSize:16, fontFamily:"Roboto Mono,monospace", fontWeight:700, color:C.text, background:"#F9FAFB", textAlign:"right" }}
-        />
-        <div style={{ fontSize:13, color:C.faint }}>to win</div>
+      {/* Mode toggle */}
+      <div style={{ display:"flex", gap:8, marginBottom:20, background:"#F3F4F6", borderRadius:12, padding:4 }}>
+        {[["build","🎰 Build Parlay"],["props-hub","⚡ Props Hub"]].map(([m, label]) => (
+          <button key={m} onClick={()=>setMode(m)} className="btn" style={{
+            flex:1, padding:"10px 0", fontSize:13, fontWeight: mode===m ? 700 : 500,
+            background: mode===m ? C.surface : "transparent",
+            color: mode===m ? C.text : C.muted,
+            border: "none", borderRadius:8,
+            boxShadow: mode===m ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
+          }}>{label}</button>
+        ))}
       </div>
 
-      {/* Parlay legs */}
-      <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:12 }}>
-        {legs.map((leg, i) => {
-          const best = bestOdds(leg.bookOdds);
-          return (
-            <div key={leg.id} className="card" style={{ padding:"12px 16px", display:"flex", alignItems:"center", gap:12 }}>
-              <div style={{ width:28, height:28, borderRadius:6, background:C.accentBg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, flexShrink:0 }}>
-                {leg.icon}
+      {/* ── BUILD PARLAY MODE ── */}
+      {mode === "build" && (
+        <>
+          {/* Stake */}
+          <div className="card" style={{ padding:16, marginBottom:16, display:"flex", alignItems:"center", gap:12 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.muted, flexShrink:0 }}>Stake ($)</div>
+            <input value={stake} onChange={e=>setStake(e.target.value.replace(/[^0-9.]/g,""))} style={{ flex:1, padding:"8px 12px", borderRadius:8, border:`1.5px solid ${C.border}`, fontSize:16, fontFamily:"Roboto Mono,monospace", fontWeight:700, color:C.text, background:"#F9FAFB", textAlign:"right" }} />
+            <div style={{ fontSize:13, color:C.faint }}>to win</div>
+          </div>
+
+          {/* Legs */}
+          <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:12 }}>
+            {legs.map((leg) => {
+              const best = bestOdds(leg.bookOdds);
+              return (
+                <div key={leg.id} className="card" style={{ padding:"12px 16px", display:"flex", alignItems:"center", gap:12 }}>
+                  <div style={{ width:28, height:28, borderRadius:6, background:C.accentBg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, flexShrink:0 }}>{leg.icon}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:11, color:C.faint, marginBottom:2 }}>{leg.sport} · {leg.game}</div>
+                    <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{leg.label}</div>
+                    {best.book && <div style={{ fontSize:11, color:best.book.color, marginTop:2 }}>Best: <strong>{fmtAmerican(best.best)}</strong> @ {best.book.name}</div>}
+                  </div>
+                  <button onClick={()=>removeLeg(leg.id)} style={{ background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:20, padding:4, flexShrink:0 }}>×</button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Add leg buttons */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:20 }}>
+            <button onClick={()=>setShowAddLeg(true)} className="btn" style={{ padding:12, background:C.accentBg, color:C.accent, fontSize:13, border:`1.5px dashed ${C.accent}` }}>
+              + Game/Spread/Total
+            </button>
+            <button onClick={()=>setMode("props-hub")} className="btn" style={{ padding:12, background:"#FEF3C7", color:C.amber, fontSize:13, border:`1.5px dashed ${C.amber}` }}>
+              ⚡ Add Prop Leg
+            </button>
+          </div>
+
+          {/* Results */}
+          {legs.length >= 2 && bookResults.length > 0 && (
+            <div>
+              <div style={{ fontSize:13, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:12 }}>
+                {legs.length}-Leg Parlay · ${stake} stake
               </div>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:12, color:C.faint, marginBottom:2 }}>{leg.sport} · {leg.game}</div>
-                <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{leg.label}</div>
-                {best.book && <div style={{ fontSize:11, color:best.book.color, marginTop:2 }}>Best odds: <strong>{fmtAmerican(best.best)}</strong> @ {best.book.name}</div>}
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {bookResults.map(({ book, result }, i) => {
+                  const isB = i === 0;
+                  const diff = isB ? null : (parseFloat(result.profit) - parseFloat(bestPayout)).toFixed(2);
+                  return (
+                    <div key={book.apiKey} className="card" onClick={()=>trackAndOpen(book,"parlay")} style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:14, cursor:"pointer", border:`1.5px solid ${isB ? book.color : C.border}`, background: isB ? `${book.color}08` : C.surface, transition:"all 0.15s" }}
+                      onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                      onMouseLeave={e=>e.currentTarget.style.transform="translateY(0)"}
+                    >
+                      <div style={{ width:44, height:44, borderRadius:10, background:book.color, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:"#fff", fontFamily:"Roboto Mono,monospace", flexShrink:0 }}>{book.short}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
+                          <span style={{ fontSize:15, fontWeight:700, color:C.text }}>{book.name}</span>
+                          {isB && <Badge color={book.color} bg={`${book.color}18`}>🏆 Best</Badge>}
+                        </div>
+                        <div style={{ fontSize:12, color:C.muted }}>{result.american} · {result.decimal}x</div>
+                      </div>
+                      <div style={{ textAlign:"right", flexShrink:0 }}>
+                        <div className="mono" style={{ fontSize:20, fontWeight:800, color: isB ? book.color : C.text }}>${result.payout}</div>
+                        <div style={{ fontSize:11, color: isB ? C.green : C.red, fontWeight:600 }}>
+                          {isB ? `+$${result.profit}` : `-$${Math.abs(diff)}`}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <button onClick={() => removeLeg(leg.id)} style={{ background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:20, padding:4, flexShrink:0 }}>×</button>
+              {bookResults.length >= 2 && (
+                <div style={{ marginTop:16, background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:12, padding:"14px 18px" }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:C.green, marginBottom:4 }}>
+                    💡 Best vs Worst: ${(parseFloat(bookResults[0].result.profit) - parseFloat(bookResults[bookResults.length-1].result.profit)).toFixed(2)} difference
+                  </div>
+                  <div style={{ fontSize:12, color:C.green }}>
+                    {bookResults[0].book.name} pays ${bookResults[0].result.payout} vs {bookResults[bookResults.length-1].book.name} at ${bookResults[bookResults.length-1].result.payout}.
+                  </div>
+                </div>
+              )}
             </div>
-          );
-        })}
-      </div>
+          )}
 
-      {/* Add leg button */}
-      <button onClick={() => setShowAddLeg(true)} className="btn" style={{ width:"100%", padding:12, background:C.accentBg, color:C.accent, fontSize:14, border:`1.5px dashed ${C.accent}`, marginBottom:20 }}>
-        + Add Leg {legs.length > 0 ? `(${legs.length} leg${legs.length>1?"s":""} added)` : ""}
-      </button>
+          {legs.length === 1 && <div style={{ textAlign:"center", padding:"16px 0", color:C.faint, fontSize:13 }}>Add at least one more leg to compare payouts</div>}
 
-      {/* Add leg modal */}
+          {legs.length === 0 && (
+            <div className="card" style={{ padding:40, textAlign:"center" }}>
+              <div style={{ fontSize:40, marginBottom:12 }}>🎰</div>
+              <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:8 }}>Build your parlay</div>
+              <div style={{ fontSize:14, color:C.muted }}>Add 2+ legs to compare payouts across all sportsbooks.</div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── PROPS HUB MODE ── */}
+      {mode === "props-hub" && (
+        <div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+            <div>
+              <div style={{ fontSize:16, fontWeight:800, color:C.text }}>⚡ Props Hub</div>
+              <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>Today & tomorrow's props. Tap any to add to parlay.</div>
+            </div>
+            {legs.length > 0 && (
+              <button onClick={()=>setMode("build")} className="btn" style={{ padding:"8px 14px", background:C.accent, color:"#fff", fontSize:13 }}>
+                View Parlay ({legs.length}) →
+              </button>
+            )}
+          </div>
+
+          {/* Load button */}
+          {!hubLoaded && !hubLoading && (
+            <div className="card" style={{ padding:40, textAlign:"center" }}>
+              <div style={{ fontSize:36, marginBottom:12 }}>⚡</div>
+              <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:8 }}>Load Today's Props</div>
+              <div style={{ fontSize:13, color:C.muted, marginBottom:20 }}>Fetches player props for today's & tomorrow's games across all sports.</div>
+              <button onClick={loadPropsHub} className="btn" style={{ padding:"12px 24px", background:C.accent, color:"#fff", fontSize:14 }}>
+                Load Props
+              </button>
+            </div>
+          )}
+
+          {/* Loading */}
+          {hubLoading && (
+            <div className="card" style={{ padding:40, textAlign:"center" }}>
+              <div style={{ display:"inline-block", width:28, height:28, border:`3px solid ${C.border}`, borderTopColor:C.accent, borderRadius:"50%", animation:"spin 0.7s linear infinite", marginBottom:12 }} />
+              <div style={{ fontSize:14, color:C.muted }}>Loading props for today's games…</div>
+              <div style={{ fontSize:12, color:C.faint, marginTop:4 }}>This may take 15–20 seconds</div>
+            </div>
+          )}
+
+          {/* Props list */}
+          {hubLoaded && (
+            <>
+              {/* Search */}
+              <input value={hubSearch} onChange={e=>setHubSearch(e.target.value)} placeholder="🔍 Search any player name..." style={{ width:"100%", padding:"10px 14px", borderRadius:10, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:12, background:C.surface }} />
+
+              {/* Sport filter */}
+              {hubSports.length > 2 && (
+                <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:8, marginBottom:8 }}>
+                  {hubSports.map(s => <Pill key={s} active={hubSport===s} onClick={()=>setHubSport(s)}>{s}</Pill>)}
+                </div>
+              )}
+
+              {/* Category filter */}
+              <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:16 }}>
+                {hubCategories.map(cat => <Pill key={cat} active={hubCategory===cat} onClick={()=>setHubCategory(cat)}>{cat}</Pill>)}
+              </div>
+
+              <div style={{ fontSize:12, color:C.faint, marginBottom:12 }}>
+                {filteredHub.length} props across {new Set(filteredHub.map(p=>p.ev.id)).size} games
+              </div>
+
+              {filteredHub.length === 0 && (
+                <div style={{ textAlign:"center", padding:"32px 0", color:C.faint, fontSize:14 }}>
+                  No props found{hubSearch ? ` for "${hubSearch}"` : ""} — try a different filter
+                </div>
+              )}
+
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {filteredHub.slice(0, 50).map((p, i) => {
+                  const legId = `${p.ev.id}_prop_${p.propKey}_${p.player}_${p.type}`;
+                  const added = legs.find(l => l.id === legId);
+                  return (
+                    <div key={`${legId}_${i}`} className="card" style={{ padding:"14px 16px", display:"flex", alignItems:"center", gap:12, border:`1.5px solid ${added ? C.green : C.border}`, background: added ? C.greenBg : C.surface, transition:"all 0.15s" }}>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
+                          <span style={{ fontSize:11, fontWeight:700, color: p.type==="Over" ? C.green : C.red, background: p.type==="Over" ? C.greenBg : C.redBg, padding:"1px 7px", borderRadius:10 }}>
+                            {p.type} {p.line ?? ""}
+                          </span>
+                          <span style={{ fontSize:11, color:C.faint }}>{p.propEmoji} {p.propLabel}</span>
+                        </div>
+                        <div style={{ fontSize:15, fontWeight:800, color:C.text }}>{p.player}</div>
+                        <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{p.ev.icon} {p.ev.away} @ {p.ev.home} · {p.ev.time}</div>
+                        {p.bestBook && (
+                          <div style={{ fontSize:11, color:p.bestBook.color, marginTop:2 }}>
+                            Best: <strong>{fmtAmerican(p.bestOdds)}</strong> @ {p.bestBook.name}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (added) { removeLeg(legId); return; }
+                          addPropLeg(p.ev, p.propLabel, p.outcome, p.type);
+                        }}
+                        className="btn"
+                        style={{ padding:"8px 14px", background: added ? C.green : C.accent, color:"#fff", fontSize:13, flexShrink:0, minWidth:64 }}
+                      >
+                        {added ? "✓ Added" : "+ Add"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {filteredHub.length > 50 && (
+                <div style={{ textAlign:"center", padding:"16px 0", fontSize:13, color:C.faint }}>
+                  Showing 50 of {filteredHub.length} — use search or filters to narrow down
+                </div>
+              )}
+
+              <button onClick={()=>setMode("build")} className="btn" style={{ width:"100%", marginTop:16, padding:12, background: legs.length > 0 ? C.accent : "#F3F4F6", color: legs.length > 0 ? "#fff" : C.muted, fontSize:14 }}>
+                {legs.length > 0 ? `View Parlay (${legs.length} legs) →` : "Back to Parlay Builder"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── ADD LEG MODAL (game/spread/total) ── */}
       {showAddLeg && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:100, display:"flex", alignItems:"flex-end" }} onClick={() => { setShowAddLeg(false); setSelectedEventForLeg(null); }}>
-          <div onClick={e => e.stopPropagation()} style={{ background:C.surface, borderRadius:"20px 20px 0 0", padding:20, width:"100%", maxHeight:"80vh", overflowY:"auto" }}>
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:100, display:"flex", alignItems:"flex-end" }} onClick={()=>{ setShowAddLeg(false); setSelectedEventForLeg(null); }}>
+          <div onClick={e=>e.stopPropagation()} style={{ background:C.surface, borderRadius:"20px 20px 0 0", padding:20, width:"100%", maxHeight:"80vh", overflowY:"auto" }}>
             <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:16 }}>
               {selectedEvent ? `${selectedEvent.away} @ ${selectedEvent.home}` : "Select a Game"}
             </div>
 
             {!selectedEvent && (
               <>
-                <input
-                  value={legSearch}
-                  onChange={e => setLegSearch(e.target.value)}
-                  placeholder="🔍 Search teams..."
-                  autoFocus
-                  style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:14, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:12 }}
-                />
+                <input value={legSearch} onChange={e=>setLegSearch(e.target.value)} placeholder="🔍 Search teams..." autoFocus style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:14, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:12 }} />
                 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                   {filteredEvents.map(ev => (
-                    <div key={ev.id} onClick={() => { setSelectedEventForLeg(ev); setLegMarket("h2h"); }} style={{ padding:"12px 14px", borderRadius:10, border:`1px solid ${C.border}`, cursor:"pointer", background:"#F9FAFB" }}>
+                    <div key={ev.id} onClick={()=>{ setSelectedEventForLeg(ev); setLegMarket("h2h"); }} style={{ padding:"12px 14px", borderRadius:10, border:`1px solid ${C.border}`, cursor:"pointer", background:"#F9FAFB" }}>
                       <div style={{ fontSize:11, color:C.faint, marginBottom:3 }}>{ev.icon} {ev.sportLabel} · {ev.time}</div>
                       <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{ev.away} @ {ev.home}</div>
                     </div>
@@ -1521,167 +1779,30 @@ function ParlayTool({ events }) {
 
             {selectedEvent && (
               <>
-                <button onClick={() => { setSelectedEventForLeg(null); setParlayProps(null); setParlayPropType(null); }} style={{ background:"none", border:"none", cursor:"pointer", color:C.accent, fontSize:13, padding:"0 0 12px 0" }}>← Back to games</button>
+                <button onClick={()=>setSelectedEventForLeg(null)} style={{ background:"none", border:"none", cursor:"pointer", color:C.accent, fontSize:13, padding:"0 0 12px 0" }}>← Back</button>
                 <div style={{ display:"flex", gap:8, marginBottom:16, overflowX:"auto" }}>
-                  {markets.map(m => <Pill key={m.id} active={legMarket===m.id} onClick={()=>{ setLegMarket(m.id); if (m.id !== "props") { setParlayProps(null); } }}>{m.label}</Pill>)}
+                  {markets.filter(m => m.id !== "props").map(m => <Pill key={m.id} active={legMarket===m.id} onClick={()=>setLegMarket(m.id)}>{m.label}</Pill>)}
                 </div>
-
-                {/* Standard markets */}
-                {legMarket !== "props" && (
-                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                    {getOutcomes(selectedEvent, legMarket).map(outcome => {
-                      const best = bestOdds(outcome.oddsMap);
-                      const alreadyAdded = legs.find(l => l.id === `${selectedEvent.id}_${outcome.key}`);
-                      return (
-                        <div key={outcome.key} onClick={() => !alreadyAdded && addLeg(selectedEvent, outcome)} style={{ padding:"14px 16px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded ? "default" : "pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                          <div>
-                            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.label}</div>
-                            {best.book && <div style={{ fontSize:12, color:best.book.color, marginTop:2 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
-                          </div>
-                          <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent }}>
-                            {alreadyAdded ? "✓ Added" : "+ Add"}
-                          </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {getOutcomes(selectedEvent, legMarket).map(outcome => {
+                    const best = bestOdds(outcome.oddsMap);
+                    const alreadyAdded = legs.find(l => l.id === `${selectedEvent.id}_${outcome.key}`);
+                    return (
+                      <div key={outcome.key} onClick={()=>{ if(!alreadyAdded) addLeg(selectedEvent, outcome, false); }} style={{ padding:"14px 16px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded?"default":"pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <div>
+                          <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.label}</div>
+                          {best.book && <div style={{ fontSize:12, color:best.book.color, marginTop:2 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Player props market */}
-                {legMarket === "props" && (
-                  <div>
-                    {parlayPropsLoading && (
-                      <div style={{ textAlign:"center", padding:"24px 0" }}>
-                        <div style={{ display:"inline-block", width:20, height:20, border:`3px solid ${C.border}`, borderTopColor:C.accent, borderRadius:"50%", animation:"spin 0.7s linear infinite", marginBottom:8 }} />
-                        <div style={{ fontSize:13, color:C.muted }}>Loading player props…</div>
+                        <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent }}>
+                          {alreadyAdded ? "✓ Added" : "+ Add"}
+                        </div>
                       </div>
-                    )}
-                    {!parlayPropsLoading && Object.keys(parlayProps || {}).length === 0 && (
-                      <div style={{ textAlign:"center", padding:"24px 0", color:C.faint, fontSize:13 }}>
-                        <div style={{ fontSize:28, marginBottom:8 }}>🏅</div>
-                        Props not available yet for this game.<br/>Check back closer to tip-off, or upgrade your Odds API plan.
-                      </div>
-                    )}
-                    {!parlayPropsLoading && Object.keys(parlayProps || {}).length > 0 && (
-                      <>
-                        {/* Prop type pills */}
-                        <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:10, marginBottom:12 }}>
-                          {Object.entries(parlayProps).map(([pt, pd]) => (
-                            <Pill key={pt} active={parlayPropType===pt} onClick={()=>{ setParlayPropType(pt); setParlayPropSearch(""); }}>
-                              {pd.label}
-                            </Pill>
-                          ))}
-                        </div>
-                        {/* Player search */}
-                        <input
-                          value={parlayPropSearch}
-                          onChange={e=>setParlayPropSearch(e.target.value)}
-                          placeholder="🔍 Search player..."
-                          style={{ width:"100%", padding:"8px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:10 }}
-                        />
-                        {/* Prop outcomes */}
-                        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                          {Object.entries(parlayProps[parlayPropType]?.outcomes || {})
-                            .filter(([k, o]) => !parlayPropSearch || o.player.toLowerCase().includes(parlayPropSearch.toLowerCase()))
-                            .map(([key, outcome]) => {
-                              const best = bestOdds(outcome.books);
-                              const legId = `${selectedEvent.id}_prop_${key}`;
-                              const alreadyAdded = legs.find(l => l.id === legId);
-                              const propLabel = `${outcome.player} ${outcome.type}${outcome.line != null ? ` ${outcome.line}` : ""} ${parlayProps[parlayPropType]?.label || ""}`;
-                              return (
-                                <div key={key} onClick={() => {
-                                  if (alreadyAdded) return;
-                                  addLeg(selectedEvent, {
-                                    label: propLabel,
-                                    key: `prop_${key}`,
-                                    oddsMap: outcome.books,
-                                  });
-                                }} style={{ padding:"12px 14px", borderRadius:10, border:`1.5px solid ${alreadyAdded ? C.green : C.border}`, cursor: alreadyAdded ? "default" : "pointer", background: alreadyAdded ? C.greenBg : "#F9FAFB", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                                  <div style={{ minWidth:0, flex:1 }}>
-                                    <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{outcome.player}</div>
-                                    <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>
-                                      {outcome.type}{outcome.line != null ? ` ${outcome.line}` : ""} · {parlayProps[parlayPropType]?.label}
-                                    </div>
-                                    {best.book && <div style={{ fontSize:11, color:best.book.color, marginTop:1 }}>Best: {fmtAmerican(best.best)} @ {best.book.name}</div>}
-                                  </div>
-                                  <div style={{ fontSize:13, fontWeight:700, color: alreadyAdded ? C.green : C.accent, flexShrink:0, marginLeft:8 }}>
-                                    {alreadyAdded ? "✓ Added" : "+ Add"}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+                    );
+                  })}
+                </div>
               </>
             )}
           </div>
-        </div>
-      )}
-
-      {/* Results */}
-      {legs.length >= 2 && bookResults.length > 0 && (
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:12 }}>
-            {legs.length}-Leg Parlay · ${stake} stake
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-            {bookResults.map(({ book, result }, i) => {
-              const isB = i === 0;
-              const diff = isB ? null : (parseFloat(result.profit) - parseFloat(bestPayout)).toFixed(2);
-              return (
-                <div key={book.apiKey} className="card" onClick={() => trackAndOpen(book, "parlay")} style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:14, cursor:"pointer", border:`1.5px solid ${isB ? book.color : C.border}`, background: isB ? `${book.color}08` : C.surface, transition:"all 0.15s" }}
-                  onMouseEnter={e => e.currentTarget.style.transform="translateY(-1px)"}
-                  onMouseLeave={e => e.currentTarget.style.transform="translateY(0)"}
-                >
-                  <div style={{ width:44, height:44, borderRadius:10, background:book.color, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:"#fff", fontFamily:"Roboto Mono,monospace", flexShrink:0 }}>
-                    {book.short}
-                  </div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
-                      <span style={{ fontSize:15, fontWeight:700, color:C.text }}>{book.name}</span>
-                      {isB && <Badge color={book.color} bg={`${book.color}18`}>🏆 Best Payout</Badge>}
-                    </div>
-                    <div style={{ fontSize:12, color:C.muted }}>
-                      {result.american} odds · {result.decimal}x multiplier
-                    </div>
-                  </div>
-                  <div style={{ textAlign:"right", flexShrink:0 }}>
-                    <div className="mono" style={{ fontSize:20, fontWeight:800, color: isB ? book.color : C.text }}>${result.payout}</div>
-                    <div style={{ fontSize:11, color: isB ? C.green : C.red, fontWeight:600 }}>
-                      {isB ? `+$${result.profit} profit` : `-$${Math.abs(diff)} less`}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Summary callout */}
-          {bookResults.length >= 2 && (
-            <div style={{ marginTop:16, background:C.greenBg, border:`1px solid ${C.green}44`, borderRadius:12, padding:"14px 18px" }}>
-              <div style={{ fontSize:13, fontWeight:700, color:C.green, marginBottom:4 }}>
-                💡 Best vs Worst: ${(parseFloat(bookResults[0].result.profit) - parseFloat(bookResults[bookResults.length-1].result.profit)).toFixed(2)} difference
-              </div>
-              <div style={{ fontSize:12, color:C.green }}>
-                {bookResults[0].book.name} pays ${bookResults[0].result.payout} vs {bookResults[bookResults.length-1].book.name} at ${bookResults[bookResults.length-1].result.payout} on the same parlay.
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {legs.length === 1 && (
-        <div style={{ textAlign:"center", padding:"24px 0", color:C.faint, fontSize:14 }}>Add at least one more leg to compare payouts</div>
-      )}
-
-      {legs.length === 0 && (
-        <div className="card" style={{ padding:40, textAlign:"center" }}>
-          <div style={{ fontSize:40, marginBottom:12 }}>🎰</div>
-          <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:8 }}>Build your parlay</div>
-          <div style={{ fontSize:14, color:C.muted }}>Add 2+ legs and see exactly which sportsbook pays the most — and how much you're leaving on the table with the others.</div>
         </div>
       )}
     </div>
