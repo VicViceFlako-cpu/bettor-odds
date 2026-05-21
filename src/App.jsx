@@ -267,7 +267,47 @@ async function fetchPlayerProps(sportKey, eventId) {
       (bm.markets || []).forEach(mkt => {
         // mkt.key looks like "player_points", "player_rebounds", etc.
         const propKey = mkt.key;
-        if (!props[propKey]) props[propKey] = { label: propKey.replace("player_","").replace(/_/g," ").replace(/\w/g,c=>c.toUpperCase()), outcomes: {} };
+        const PROP_META = {
+          "player_points":{"label":"Points","emoji":"🏀","category":"Scoring"},
+          "player_rebounds":{"label":"Rebounds","emoji":"💪","category":"Scoring"},
+          "player_assists":{"label":"Assists","emoji":"🎯","category":"Scoring"},
+          "player_threes":{"label":"3-Pointers","emoji":"🎯","category":"Scoring"},
+          "player_blocks":{"label":"Blocks","emoji":"🛡","category":"Defense"},
+          "player_steals":{"label":"Steals","emoji":"🤝","category":"Defense"},
+          "player_points_rebounds_assists":{"label":"Pts+Reb+Ast","emoji":"⭐","category":"Combos"},
+          "player_points_rebounds":{"label":"Pts+Reb","emoji":"⭐","category":"Combos"},
+          "player_points_assists":{"label":"Pts+Ast","emoji":"⭐","category":"Combos"},
+          "player_rebounds_assists":{"label":"Reb+Ast","emoji":"⭐","category":"Combos"},
+          "player_turnovers":{"label":"Turnovers","emoji":"🔄","category":"Other"},
+          "player_pass_yds":{"label":"Pass Yards","emoji":"🏈","category":"Passing"},
+          "player_pass_tds":{"label":"Pass TDs","emoji":"🏈","category":"Passing"},
+          "player_pass_attempts":{"label":"Pass Attempts","emoji":"🏈","category":"Passing"},
+          "player_pass_completions":{"label":"Completions","emoji":"🏈","category":"Passing"},
+          "player_rush_yds":{"label":"Rush Yards","emoji":"🦵","category":"Rushing"},
+          "player_rush_tds":{"label":"Rush TDs","emoji":"🦵","category":"Rushing"},
+          "player_rush_attempts":{"label":"Rush Attempts","emoji":"🦵","category":"Rushing"},
+          "player_reception_yds":{"label":"Rec Yards","emoji":"🙌","category":"Receiving"},
+          "player_receptions":{"label":"Receptions","emoji":"🙌","category":"Receiving"},
+          "player_receiving_tds":{"label":"Receiving TDs","emoji":"🙌","category":"Receiving"},
+          "player_anytime_td":{"label":"Anytime TD","emoji":"🎉","category":"Touchdowns"},
+          "player_first_td":{"label":"First TD","emoji":"🎉","category":"Touchdowns"},
+          "batter_hits":{"label":"Hits","emoji":"⚾","category":"Batting"},
+          "batter_home_runs":{"label":"Home Runs","emoji":"💥","category":"Batting"},
+          "batter_rbis":{"label":"RBIs","emoji":"⚾","category":"Batting"},
+          "batter_strikeouts":{"label":"K (Batter)","emoji":"❌","category":"Batting"},
+          "batter_walks":{"label":"Walks","emoji":"🚶","category":"Batting"},
+          "batter_total_bases":{"label":"Total Bases","emoji":"⚾","category":"Batting"},
+          "pitcher_strikeouts":{"label":"K (Pitcher)","emoji":"🔥","category":"Pitching"},
+          "pitcher_hits_allowed":{"label":"Hits Allowed","emoji":"🔥","category":"Pitching"},
+          "pitcher_walks":{"label":"Walks Allowed","emoji":"🔥","category":"Pitching"},
+          "pitcher_earned_runs":{"label":"Earned Runs","emoji":"🔥","category":"Pitching"},
+          "pitcher_outs":{"label":"Outs Recorded","emoji":"🔥","category":"Pitching"},
+          "player_goals":{"label":"Goals","emoji":"🥅","category":"Scoring"},
+          "player_shots_on_goal":{"label":"Shots on Goal","emoji":"🥅","category":"Scoring"},
+          "fighter_win_method":{"label":"Win Method","emoji":"🥊","category":"Result"},
+        };
+        const meta = PROP_META[propKey] || { label: propKey.replace("player_","").replace(/_/g," "), emoji:"📊", category:"Other" };
+        if (!props[propKey]) props[propKey] = { label: meta.label, emoji: meta.emoji, category: meta.category, outcomes: {} };
         mkt.outcomes.forEach(o => {
           const key = `${o.name}__${o.description || o.name}__${o.point ?? ""}`;
           if (!props[propKey].outcomes[key]) {
@@ -548,14 +588,41 @@ function EventDetail({ event, onBack }) {
 
             {!propsLoading && propTypes.length > 0 && (
               <>
-                {/* Prop type selector */}
-                <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:12, marginBottom:16 }}>
-                  {propTypes.map(pt => (
-                    <Pill key={pt} active={propType===pt} onClick={()=>{ setPropType(pt); setPropSearch(""); }}>
-                      {props[pt].label}
-                    </Pill>
-                  ))}
-                </div>
+                {/* Grouped category selector */}
+                {(() => {
+                  const categories = {};
+                  propTypes.forEach(pt => {
+                    const cat = props[pt]?.category || "Other";
+                    if (!categories[cat]) categories[cat] = [];
+                    categories[cat].push(pt);
+                  });
+                  return (
+                    <div style={{ marginBottom:16 }}>
+                      {Object.entries(categories).map(([cat, pts]) => (
+                        <div key={cat} style={{ marginBottom:12 }}>
+                          <div style={{ fontSize:11, fontWeight:700, color:C.faint, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:6 }}>{cat}</div>
+                          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                            {pts.map(pt => (
+                              <button key={pt} onClick={()=>{ setPropType(pt); setPropSearch(""); }} className="btn" style={{
+                                padding:"6px 12px",
+                                background: propType===pt ? C.accent : C.surface,
+                                color: propType===pt ? "#fff" : C.text,
+                                border: `1px solid ${propType===pt ? C.accent : C.border}`,
+                                borderRadius:20,
+                                fontSize:12,
+                                fontWeight: propType===pt ? 700 : 500,
+                                display:"flex", alignItems:"center", gap:5,
+                              }}>
+                                <span>{props[pt].emoji}</span>
+                                <span>{props[pt].label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
 
                 {/* Player search */}
                 <input
