@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   if (!sport || !eventId) return res.status(400).json({ error: 'Missing sport or eventId' });
 
   const API_KEY = 'c997825601b7e1e9975c1f46caae0d6d';
-  const BOOKS = 'draftkings,fanduel,betmgm,caesars,bet365,espnbet,pointsbetus,hardrockbet';
+  const BOOKS = 'draftkings,fanduel,betmgm,caesars,espnbet,pointsbetus,hardrockbet,bovada';
 
   // Player prop markets by sport
   const PROP_MARKETS = {
@@ -21,10 +21,21 @@ export default async function handler(req, res) {
   const markets = PROP_MARKETS[sport] || 'player_points';
 
   try {
+    // Correct endpoint for non-featured markets (props) — must use /events/{eventId}/odds
     const url = `https://api.the-odds-api.com/v4/sports/${sport}/events/${eventId}/odds?apiKey=${API_KEY}&regions=us&markets=${markets}&oddsFormat=american&bookmakers=${BOOKS}`;
     const response = await fetch(url);
-    const data = await response.json();
-    res.status(200).json(data);
+    const text = await response.text();
+
+    // Parse and check for API errors
+    let data;
+    try { data = JSON.parse(text); } catch { return res.status(500).json({ error: 'Invalid JSON from API', raw: text.slice(0, 200) }); }
+
+    if (data.error_code || data.message) {
+      return res.status(400).json({ error: data.message || data.error_code, detail: data });
+    }
+
+    // API returns a single event object, wrap in array for consistency
+    res.status(200).json(Array.isArray(data) ? data : [data]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
