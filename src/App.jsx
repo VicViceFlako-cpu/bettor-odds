@@ -565,49 +565,70 @@ function EventDetail({ event, onBack }) {
                   style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, fontFamily:"Figtree,sans-serif", color:C.text, marginBottom:16, background:"#F9FAFB" }}
                 />
 
-                {/* Props list */}
+                {/* Props list — group by player, show Over + Under as separate rows */}
                 <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
-                  {filteredOutcomes.map(([key, outcome]) => {
-                    const overBooks = {};
-                    const underBooks = {};
-                    Object.entries(outcome.books).forEach(([bookId, price]) => {
-                      // Separate over/under if available, otherwise just show all
-                      if (outcome.type === "Over") overBooks[bookId] = price;
-                      else if (outcome.type === "Under") underBooks[bookId] = price;
-                      else overBooks[bookId] = price;
+                  {(() => {
+                    // Group outcomes by player + line so Over and Under appear together
+                    const grouped = {};
+                    filteredOutcomes.forEach(([key, outcome]) => {
+                      const groupKey = `${outcome.player}__${outcome.line ?? ""}`;
+                      if (!grouped[groupKey]) grouped[groupKey] = { player: outcome.player, line: outcome.line, over: null, under: null };
+                      if (outcome.type === "Over") grouped[groupKey].over = outcome.books;
+                      else if (outcome.type === "Under") grouped[groupKey].under = outcome.books;
+                      else grouped[groupKey].over = outcome.books; // fallback
                     });
-                    const bestOver = bestOdds(overBooks);
-                    const bestUnder = bestOdds(underBooks);
 
-                    return (
-                      <div key={key} style={{ borderBottom:`1px solid ${C.border}`, paddingBottom:16 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                          <div>
-                            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{outcome.player}</div>
-                            {outcome.line != null && (
+                    return Object.entries(grouped).map(([gk, group]) => {
+                      const bestOver  = bestOdds(group.over  || {});
+                      const bestUnder = bestOdds(group.under || {});
+                      const overBest  = bestOver.book;
+                      const underBest = bestUnder.book;
+
+                      return (
+                        <div key={gk} style={{ borderBottom:`1px solid ${C.border}`, paddingBottom:16 }}>
+                          {/* Player header */}
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                            <div>
+                              <div style={{ fontSize:15, fontWeight:800, color:C.text }}>{group.player}</div>
                               <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>
-                                {props[propType]?.label} · Line: <strong>{outcome.line}</strong>
+                                {props[propType]?.label}{group.line != null ? ` · Line: ${group.line}` : ""}
                               </div>
-                            )}
+                            </div>
                           </div>
-                          {bestOver.book && (
-                            <Badge color={bestOver.book.color} bg={`${bestOver.book.color}15`}>
-                              Best: {fmtAmerican(bestOver.best)} {bestOver.book.short}
-                            </Badge>
+
+                          {/* Over row */}
+                          {group.over && (
+                            <div style={{ marginBottom:12 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                                <span style={{ fontSize:11, fontWeight:800, color:C.green, background:C.greenBg, padding:"2px 8px", borderRadius:20, letterSpacing:"0.05em" }}>OVER {group.line ?? ""}</span>
+                                {overBest && <span style={{ fontSize:11, color:overBest.color, fontWeight:600 }}>Best: {fmtAmerican(bestOver.best)} @ {overBest.name}</span>}
+                              </div>
+                              <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                                {SPORTSBOOKS.map(book => (
+                                  <BookChip key={book.apiKey} book={book} odds={group.over[book.apiKey] ?? null} isBest={book.apiKey === bestOver.apiKey && group.over[book.apiKey] != null} onClick={() => trackAndOpen(book, "props")} />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Under row */}
+                          {group.under && (
+                            <div>
+                              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                                <span style={{ fontSize:11, fontWeight:800, color:C.red, background:C.redBg, padding:"2px 8px", borderRadius:20, letterSpacing:"0.05em" }}>UNDER {group.line ?? ""}</span>
+                                {underBest && <span style={{ fontSize:11, color:underBest.color, fontWeight:600 }}>Best: {fmtAmerican(bestUnder.best)} @ {underBest.name}</span>}
+                              </div>
+                              <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                                {SPORTSBOOKS.map(book => (
+                                  <BookChip key={book.apiKey} book={book} odds={group.under[book.apiKey] ?? null} isBest={book.apiKey === bestUnder.apiKey && group.under[book.apiKey] != null} onClick={() => trackAndOpen(book, "props")} />
+                                ))}
+                              </div>
+                            </div>
                           )}
                         </div>
-                        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                          {SPORTSBOOKS.map(book => {
-                            const odds = overBooks[book.apiKey] ?? underBooks[book.apiKey] ?? null;
-                            const isBest = book.apiKey === bestOver.apiKey || book.apiKey === bestUnder.apiKey;
-                            return (
-                              <BookChip key={book.apiKey} book={book} odds={odds} isBest={isBest && odds != null} onClick={() => trackAndOpen(book, "props")} />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                   {filteredOutcomes.length === 0 && propSearch && (
                     <div style={{ textAlign:"center", padding:"20px 0", color:C.faint, fontSize:13 }}>No players found for "{propSearch}"</div>
                   )}
