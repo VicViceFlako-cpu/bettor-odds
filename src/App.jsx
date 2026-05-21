@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 
-const ODDS_API_KEY = "2e7f79219669f2c22384183e68d8fea3"; // Used when deployed with real backend
+const ODDS_API_KEY = "c997825601b7e1e9975c1f46caae0d6d"; // Used when deployed with real backend
 const ODDS_BASE    = "https://api.the-odds-api.com/v4";         // Real API base URL for production
 
 // The Odds API sport keys → our display config
