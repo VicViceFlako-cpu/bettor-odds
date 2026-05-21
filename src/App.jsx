@@ -11,14 +11,24 @@ const PRO_FEATURES = [
   { icon:"🎯", label:"AI Advisor",        desc:"Unlimited AI betting analysis" },
   { icon:"🏅", label:"Player Props",      desc:"Best odds across all books on any prop" },
 ];
-const TRIAL_DAYS = 7;
+
+// Promo codes — add as many as you want
+// Each code maps to a Stripe coupon ID or a special trial length
+const PROMO_CODES = {
+  "BETTOR30":  { days: 30, label: "30 days free",  stripeCode: "BETTOR30"  },
+  "SHARP30":   { days: 30, label: "30 days free",  stripeCode: "SHARP30"   },
+  "EDGE30":    { days: 30, label: "30 days free",  stripeCode: "EDGE30"    },
+  "LAUNCH30":  { days: 30, label: "30 days free",  stripeCode: "LAUNCH30"  },
+  "VIP30":     { days: 30, label: "30 days free",  stripeCode: "VIP30"     },
+};
+
+const TRIAL_DAYS = 30; // 30-day free trial, no card required
 const PRO_NAV_IDS = ["parlay","arb","movement","alerts","advisor"];
 
-// Check/set trial in localStorage
 function getProStatus() {
   try {
     const raw = localStorage.getItem("bo_pro");
-    if (!raw) return { status: "none" }; // never started
+    if (!raw) return { status: "none" };
     return JSON.parse(raw);
   } catch { return { status: "none" }; }
 }
@@ -27,9 +37,9 @@ function setProStatus(status) {
   try { localStorage.setItem("bo_pro", JSON.stringify(status)); } catch {}
 }
 
-function startTrial() {
-  const expires = Date.now() + TRIAL_DAYS * 86400000;
-  setProStatus({ status:"trial", expires, started: Date.now() });
+function startTrial(days, promoCode) {
+  const expires = Date.now() + days * 86400000;
+  setProStatus({ status:"trial", expires, started: Date.now(), days, promoCode: promoCode || null });
 }
 
 function isProActive() {
@@ -45,61 +55,145 @@ function daysLeftInTrial() {
   return Math.max(0, Math.ceil((s.expires - Date.now()) / 86400000));
 }
 
+function validatePromo(code) {
+  return PROMO_CODES[code.toUpperCase().trim()] || null;
+}
+
 // ─── PAYWALL MODAL ────────────────────────────────────────────────────────────
 
 function ProModal({ onClose, onStartTrial, onUpgrade, trialUsed }) {
+  const [promoInput, setPromoInput] = useState("");
+  const [promoResult, setPromoResult] = useState(null); // null | { valid, promo, code }
+  const [promoChecked, setPromoChecked] = useState(false);
+  const [view, setView] = useState("main"); // "main" | "promo"
+
+  function checkPromo() {
+    const promo = validatePromo(promoInput);
+    setPromoChecked(true);
+    if (promo) {
+      setPromoResult({ valid: true, promo, code: promoInput.toUpperCase().trim() });
+    } else {
+      setPromoResult({ valid: false });
+    }
+  }
+
+  function handlePromoTrial() {
+    if (promoResult?.valid) {
+      // Open Stripe with promo code pre-applied
+      onUpgrade(promoResult.promo.stripeCode);
+      // Locally unlock for the promo period (real unlock happens via Stripe webhook in production)
+      onStartTrial(promoResult.promo.days, promoResult.code);
+    }
+  }
+
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={onClose}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{ background:C.surface, borderRadius:20, padding:28, width:"100%", maxWidth:400, maxHeight:"90vh", overflowY:"auto" }}>
 
         {/* Header */}
-        <div style={{ textAlign:"center", marginBottom:24 }}>
+        <div style={{ textAlign:"center", marginBottom:20 }}>
           <div style={{ fontSize:40, marginBottom:8 }}>🎯</div>
           <div style={{ fontSize:22, fontWeight:800, color:C.text, marginBottom:4 }}>Bettor Odds Pro</div>
           <div style={{ fontSize:14, color:C.muted }}>The sharpest edge in sports betting</div>
         </div>
 
-        {/* Price */}
+        {/* Price hero */}
         <div style={{ background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", borderRadius:14, padding:"16px 20px", marginBottom:20, textAlign:"center" }}>
-          <div style={{ fontSize:32, fontWeight:800, color:"#fff" }}>{PRO_PRICE}<span style={{ fontSize:16, fontWeight:500 }}>/mo</span></div>
-          {!trialUsed && <div style={{ fontSize:13, color:"rgba(255,255,255,0.8)", marginTop:4 }}>Start with {TRIAL_DAYS}-day free trial · Cancel anytime</div>}
+          <div style={{ fontSize:32, fontWeight:800, color:"#fff" }}>
+            {PRO_PRICE}<span style={{ fontSize:16, fontWeight:500 }}>/mo</span>
+          </div>
+          <div style={{ fontSize:13, color:"rgba(255,255,255,0.85)", marginTop:4 }}>
+            {trialUsed ? `${PRO_PRICE}/mo · Cancel anytime` : `${TRIAL_DAYS}-day free trial · No card required`}
+          </div>
+          <div style={{ fontSize:11, color:"rgba(255,255,255,0.65)", marginTop:3 }}>
+            ✅ Free to try · No commitment
+          </div>
         </div>
 
         {/* Features */}
-        <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:24 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:20 }}>
           {PRO_FEATURES.map((f, i) => (
             <div key={i} style={{ display:"flex", alignItems:"center", gap:12 }}>
-              <div style={{ width:36, height:36, borderRadius:10, background:C.accentBg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>{f.icon}</div>
-              <div>
-                <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{f.label}</div>
-                <div style={{ fontSize:12, color:C.muted }}>{f.desc}</div>
+              <div style={{ width:34, height:34, borderRadius:9, background:C.accentBg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, flexShrink:0 }}>{f.icon}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{f.label}</div>
+                <div style={{ fontSize:11, color:C.muted }}>{f.desc}</div>
               </div>
-              <div style={{ marginLeft:"auto", color:C.green, fontSize:18 }}>✓</div>
+              <div style={{ color:C.green, fontSize:16 }}>✓</div>
             </div>
           ))}
         </div>
 
-        {/* CTA buttons */}
-        {!trialUsed ? (
-          <>
-            <button onClick={onStartTrial} className="btn" style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", color:"#fff", fontSize:16, fontWeight:700, marginBottom:10, borderRadius:12 }}>
-              Start {TRIAL_DAYS}-Day Free Trial
-            </button>
-            <button onClick={onUpgrade} className="btn" style={{ width:"100%", padding:"12px", background:"#F3F4F6", color:C.muted, fontSize:14, borderRadius:12 }}>
-              Subscribe Now — {PRO_PRICE}/mo
-            </button>
-          </>
-        ) : (
-          <button onClick={onUpgrade} className="btn" style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", color:"#fff", fontSize:16, fontWeight:700, borderRadius:12 }}>
-            Upgrade to Pro — {PRO_PRICE}/mo
+        {/* Promo code section */}
+        {view === "main" && (
+          <button onClick={()=>setView("promo")} style={{ background:"none", border:"none", cursor:"pointer", color:C.accent, fontSize:13, fontWeight:600, padding:"0 0 16px 0", display:"block", width:"100%", textAlign:"center" }}>
+            🎁 Have a promo code? Click here
           </button>
         )}
 
-        <div style={{ textAlign:"center", marginTop:12, fontSize:11, color:C.faint }}>
-          Secure payment · Cancel anytime · No hidden fees
+        {view === "promo" && (
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:8 }}>Enter Promo Code</div>
+            <div style={{ display:"flex", gap:8 }}>
+              <input
+                value={promoInput}
+                onChange={e=>{ setPromoInput(e.target.value.toUpperCase()); setPromoChecked(false); setPromoResult(null); }}
+                onKeyDown={e=>e.key==="Enter"&&checkPromo()}
+                placeholder="e.g. BETTOR30"
+                style={{ flex:1, padding:"10px 12px", borderRadius:8, border:`1.5px solid ${promoResult?.valid ? C.green : promoResult?.valid===false ? C.red : C.border}`, fontSize:14, fontFamily:"Roboto Mono,monospace", fontWeight:700, color:C.text, textTransform:"uppercase", letterSpacing:"0.05em" }}
+              />
+              <button onClick={checkPromo} className="btn" style={{ padding:"10px 16px", background:C.accent, color:"#fff", fontSize:13 }}>Apply</button>
+            </div>
+
+            {promoChecked && promoResult?.valid && (
+              <div style={{ marginTop:8, padding:"10px 14px", background:C.greenBg, borderRadius:8, border:`1px solid ${C.green}44` }}>
+                <div style={{ fontSize:13, fontWeight:700, color:C.green }}>✅ Code applied — {promoResult.promo.label}!</div>
+                <div style={{ fontSize:12, color:C.green, marginTop:2 }}>Card required · Auto-renews at {PRO_PRICE}/mo after trial</div>
+              </div>
+            )}
+            {promoChecked && promoResult?.valid === false && (
+              <div style={{ marginTop:8, padding:"8px 12px", background:C.redBg, borderRadius:8, fontSize:12, color:C.red }}>
+                ❌ Invalid code. Check the spelling and try again.
+              </div>
+            )}
+
+            {promoResult?.valid && (
+              <button onClick={handlePromoTrial} className="btn" style={{ width:"100%", marginTop:12, padding:"14px", background:"linear-gradient(135deg, #16A34A, #15803D)", color:"#fff", fontSize:15, fontWeight:700, borderRadius:12 }}>
+                Claim {promoResult.promo.label} Free →
+              </button>
+            )}
+
+            <button onClick={()=>{setView("main"); setPromoInput(""); setPromoResult(null);}} style={{ display:"block", width:"100%", background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:12, marginTop:8, padding:4 }}>
+              ← Back
+            </button>
+          </div>
+        )}
+
+        {/* Main CTAs */}
+        {view === "main" && (
+          <>
+            {!trialUsed ? (
+              <>
+                <button onClick={()=>{ onStartTrial(TRIAL_DAYS, null); }} className="btn" style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", color:"#fff", fontSize:15, fontWeight:700, marginBottom:10, borderRadius:12 }}>
+                  Start {TRIAL_DAYS}-Day Free Trial — Free →
+                </button>
+                <div style={{ textAlign:"center", fontSize:11, color:C.faint, marginBottom:12 }}>
+                  ✅ No card required · {TRIAL_DAYS} days free · {PRO_PRICE}/mo after
+                </div>
+              </>
+            ) : (
+              <button onClick={()=>onUpgrade(null)} className="btn" style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", color:"#fff", fontSize:15, fontWeight:700, marginBottom:10, borderRadius:12 }}>
+                Subscribe — {PRO_PRICE}/mo →
+              </button>
+            )}
+          </>
+        )}
+
+        <div style={{ textAlign:"center", fontSize:11, color:C.faint }}>
+          🔒 Secure payment via Stripe · Cancel anytime in your account
         </div>
 
-        <button onClick={onClose} style={{ display:"block", width:"100%", background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:13, marginTop:12, padding:8 }}>
+        <button onClick={onClose} style={{ display:"block", width:"100%", background:"none", border:"none", cursor:"pointer", color:C.faint, fontSize:13, marginTop:14, padding:8 }}>
           Maybe later
         </button>
       </div>
@@ -109,15 +203,16 @@ function ProModal({ onClose, onStartTrial, onUpgrade, trialUsed }) {
 
 // ─── PRO BANNER ───────────────────────────────────────────────────────────────
 
-function TrialBanner({ daysLeft, onUpgrade }) {
+function TrialBanner({ daysLeft, onUpgrade, isPromo }) {
   if (daysLeft <= 0) return null;
+  const urgent = daysLeft <= 3;
   return (
-    <div style={{ background:"linear-gradient(135deg, #1B5EFF22, #7C3AED22)", border:"1px solid #1B5EFF44", borderRadius:10, padding:"10px 14px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-      <div style={{ fontSize:13, color:C.accent, fontWeight:600 }}>
-        ⏱ {daysLeft} day{daysLeft!==1?"s":""} left in your free trial
+    <div style={{ background: urgent ? C.amberBg : "linear-gradient(135deg, #1B5EFF14, #7C3AED14)", border:`1px solid ${urgent ? "#FCD34D" : "#1B5EFF33"}`, borderRadius:10, padding:"10px 14px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+      <div style={{ fontSize:13, color: urgent ? C.amber : C.accent, fontWeight:600 }}>
+        {urgent ? "⚠️" : "⏱"} {daysLeft} day{daysLeft!==1?"s":""} left in your {isPromo ? "promo" : "free"} trial
       </div>
-      <button onClick={onUpgrade} className="btn" style={{ padding:"6px 12px", background:C.accent, color:"#fff", fontSize:12 }}>
-        Upgrade
+      <button onClick={onUpgrade} className="btn" style={{ padding:"6px 12px", background: urgent ? C.amber : C.accent, color:"#fff", fontSize:12 }}>
+        Subscribe
       </button>
     </div>
   );
@@ -1449,6 +1544,42 @@ function SportsbooksPage() {
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 
 
+// ─── PRO GATE ────────────────────────────────────────────────────────────────
+
+function ProGate({ feature, onUnlock, onLearnMore }) {
+  const f = PRO_FEATURES.find(p => p.label === feature) || { icon:"🎯", label:feature, desc:"" };
+  return (
+    <div className="fade-up" style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"40px 20px", textAlign:"center" }}>
+      <div style={{ fontSize:56, marginBottom:16 }}>{f.icon}</div>
+      <div style={{ fontSize:20, fontWeight:800, color:C.text, marginBottom:8 }}>{f.label}</div>
+      <div style={{ fontSize:14, color:C.muted, marginBottom:24, maxWidth:280 }}>{f.desc}</div>
+
+      <div style={{ background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", borderRadius:16, padding:"24px 28px", width:"100%", maxWidth:340, marginBottom:20 }}>
+        <div style={{ fontSize:13, fontWeight:700, color:"rgba(255,255,255,0.75)", marginBottom:4, textTransform:"uppercase", letterSpacing:"0.08em" }}>Bettor Odds Pro</div>
+        <div style={{ fontSize:28, fontWeight:800, color:"#fff", marginBottom:4 }}>30 Days Free</div>
+        <div style={{ fontSize:13, color:"rgba(255,255,255,0.8)", marginBottom:20 }}>No card required · {PRO_PRICE}/mo after</div>
+        <button onClick={onUnlock} className="btn" style={{ width:"100%", padding:"14px", background:"#fff", color:C.accent, fontSize:15, fontWeight:800, borderRadius:10 }}>
+          🎁 Unlock Free for 30 Days
+        </button>
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:8, width:"100%", maxWidth:340 }}>
+        {PRO_FEATURES.map((feat, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:"#F9FAFB", borderRadius:8 }}>
+            <span style={{ fontSize:16 }}>{feat.icon}</span>
+            <span style={{ fontSize:13, fontWeight:600, color:C.text, flex:1 }}>{feat.label}</span>
+            <span style={{ fontSize:12, color:C.green, fontWeight:700 }}>✓ Included</span>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={onLearnMore} style={{ background:"none", border:"none", cursor:"pointer", color:C.muted, fontSize:13, marginTop:16, padding:8 }}>
+        Learn more about Pro
+      </button>
+    </div>
+  );
+}
+
 // ─── PARLAY TOOL ─────────────────────────────────────────────────────────────
 
 function ParlayTool({ events }) {
@@ -1967,15 +2098,19 @@ export default function BettorOdds() {
   const trialUsed    = proStatus.status !== "none";
   const STRIPE_URL   = "https://buy.stripe.com/your_link_here"; // Replace with real Stripe link
 
-  function handleStartTrial() {
-    startTrial();
+  function handleStartTrial(days, promoCode) {
+    startTrial(days || TRIAL_DAYS, promoCode);
     setProStatusState(getProStatus());
     setShowProModal(false);
     if (pendingNav) { setNav(pendingNav); setPendingNav(null); }
   }
 
-  function handleUpgrade() {
-    window.open(STRIPE_URL, "_blank");
+  function handleUpgrade(stripePromoCode) {
+    // Append promo code to Stripe URL if provided
+    const url = stripePromoCode
+      ? `${STRIPE_URL}?prefilled_promo_code=${stripePromoCode}`
+      : STRIPE_URL;
+    window.open(url, "_blank");
     setShowProModal(false);
   }
 
@@ -1989,7 +2124,7 @@ export default function BettorOdds() {
     setSelected(null);
   }
 
-  // Check if trial expired on mount
+  // Check trial status on mount
   useEffect(() => {
     const s = getProStatus();
     if (s.status === "trial" && s.expires < Date.now()) {
@@ -2087,8 +2222,8 @@ export default function BettorOdds() {
       {/* Body */}
       <div style={{ maxWidth:1100, margin:"0 auto", padding:"24px 20px" }}>
         {/* Trial banner */}
-        {isPro && trialDays > 0 && trialDays <= 3 && (
-          <TrialBanner daysLeft={trialDays} onUpgrade={handleUpgrade} />
+        {isPro && trialDays > 0 && trialDays <= 7 && (
+          <TrialBanner daysLeft={trialDays} onUpgrade={()=>handleUpgrade(null)} isPromo={proStatus.promoCode != null} />
         )}
 
         {/* ODDS */}
@@ -2102,6 +2237,41 @@ export default function BettorOdds() {
             </div>
 
             {error && <ErrorBox msg={error} onRetry={loadOdds} />}
+
+            {/* Welcome unlock banner — shown to brand new users */}
+            {proStatus.status === "none" && (
+              <div style={{ background:"linear-gradient(135deg, #1B5EFF, #7C3AED)", borderRadius:14, padding:"20px 20px", marginBottom:20, position:"relative", overflow:"hidden" }}>
+                <div style={{ position:"absolute", top:-20, right:-20, fontSize:80, opacity:0.08 }}>🎯</div>
+                <div style={{ fontSize:11, fontWeight:700, color:"rgba(255,255,255,0.7)", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6 }}>
+                  Limited Time Offer
+                </div>
+                <div style={{ fontSize:20, fontWeight:800, color:"#fff", marginBottom:4, lineHeight:1.2 }}>
+                  Unlock Bettor Odds Pro Free for 30 Days
+                </div>
+                <div style={{ fontSize:13, color:"rgba(255,255,255,0.8)", marginBottom:16, lineHeight:1.5 }}>
+                  Parlay comparison, arb finder, player props, line alerts & AI advisor — all free for a month. No card required.
+                </div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                  <button
+                    onClick={() => { startTrial(TRIAL_DAYS, null); setProStatusState(getProStatus()); }}
+                    className="btn"
+                    style={{ padding:"12px 20px", background:"#fff", color:C.accent, fontSize:14, fontWeight:800, borderRadius:10 }}
+                  >
+                    🎁 Unlock 30 Days Free
+                  </button>
+                  <button
+                    onClick={() => setShowProModal(true)}
+                    className="btn"
+                    style={{ padding:"12px 16px", background:"rgba(255,255,255,0.15)", color:"#fff", fontSize:13, fontWeight:600, borderRadius:10, border:"1px solid rgba(255,255,255,0.3)" }}
+                  >
+                    Learn More
+                  </button>
+                </div>
+                <div style={{ fontSize:11, color:"rgba(255,255,255,0.55)", marginTop:10 }}>
+                  {PRO_PRICE}/mo after trial · Cancel anytime
+                </div>
+              </div>
+            )}
 
             {/* Only show warnings if significant sports failed */}
             {apiWarnings.filter(w => !w.includes("too frequent")).length > 0 && (
@@ -2143,11 +2313,26 @@ export default function BettorOdds() {
         )}
 
         {nav === "odds" && selected && <EventDetail event={selected} onBack={()=>setSelected(null)} />}
-        {nav === "arb"      && <ArbFinder events={events} />}
-        {nav === "parlay"   && <ParlayTool events={events} />}
-        {nav === "movement" && <LineMovement events={events} />}
-        {nav === "alerts"   && <Alerts events={events} />}
-        {nav === "advisor"  && <AIAdvisor events={events} />}
+        {nav === "parlay"   && (isPro
+          ? <ParlayTool events={events} />
+          : <ProGate feature="Parlay Comparison" onUnlock={()=>{ startTrial(TRIAL_DAYS,null); setProStatusState(getProStatus()); }} onLearnMore={()=>setShowProModal(true)} />
+        )}
+        {nav === "arb"      && (isPro
+          ? <ArbFinder events={events} />
+          : <ProGate feature="Arbitrage Finder" onUnlock={()=>{ startTrial(TRIAL_DAYS,null); setProStatusState(getProStatus()); }} onLearnMore={()=>setShowProModal(true)} />
+        )}
+        {nav === "movement" && (isPro
+          ? <LineMovement events={events} />
+          : <ProGate feature="Line Movement" onUnlock={()=>{ startTrial(TRIAL_DAYS,null); setProStatusState(getProStatus()); }} onLearnMore={()=>setShowProModal(true)} />
+        )}
+        {nav === "alerts"   && (isPro
+          ? <Alerts events={events} />
+          : <ProGate feature="Line Alerts" onUnlock={()=>{ startTrial(TRIAL_DAYS,null); setProStatusState(getProStatus()); }} onLearnMore={()=>setShowProModal(true)} />
+        )}
+        {nav === "advisor"  && (isPro
+          ? <AIAdvisor events={events} />
+          : <ProGate feature="AI Advisor" onUnlock={()=>{ startTrial(TRIAL_DAYS,null); setProStatusState(getProStatus()); }} onLearnMore={()=>setShowProModal(true)} />
+        )}
         {nav === "books"    && <SportsbooksPage />}
         {nav === "revenue"  && (
           <>
