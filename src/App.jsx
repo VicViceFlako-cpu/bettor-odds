@@ -18,7 +18,18 @@ const SPORT_CONFIG = {
   "boxing_boxing":              { label: "Boxing", icon: "🥊", id: "boxing" },
 };
 
-const SPORT_KEYS = Object.keys(SPORT_CONFIG);
+// NBA first so it always loads — free tier hits rate limits on later sports
+const SPORT_KEYS = [
+  "basketball_nba",
+  "americanfootball_nfl",
+  "baseball_mlb",
+  "icehockey_nhl",
+  "soccer_usa_mls",
+  "basketball_ncaab",
+  "americanfootball_ncaaf",
+  "mma_mixed_martial_arts",
+  "boxing_boxing",
+];
 
 const SPORT_NAV = [
   { id: "all",    label: "All",     icon: "🏆" },
@@ -254,11 +265,16 @@ async function fetchPlayerProps(sportKey, eventId) {
 async function fetchAllSports() {
   const events = [];
   const errors = [];
-  const results = await Promise.allSettled(SPORT_KEYS.map(k => fetchSportLive(k)));
-  results.forEach((r, i) => {
-    if (r.status === "fulfilled") events.push(...r.value);
-    else errors.push(`${SPORT_KEYS[i]}: ${r.reason?.message || "failed"}`);
-  });
+  // Fetch one sport at a time with 1.2s delay to respect free tier rate limits
+  for (let i = 0; i < SPORT_KEYS.length; i++) {
+    try {
+      const evs = await fetchSportLive(SPORT_KEYS[i]);
+      events.push(...evs);
+    } catch(e) {
+      errors.push(`${SPORT_KEYS[i]}: ${e.message || "failed"}`);
+    }
+    if (i < SPORT_KEYS.length - 1) await new Promise(r => setTimeout(r, 1200));
+  }
   if (events.length === 0 && errors.length > 0) {
     throw new Error(`Failed to load live odds: ${errors[0]}`);
   }
@@ -422,6 +438,9 @@ function EventDetail({ event, onBack }) {
       const keys = Object.keys(data || {});
       if (keys.length > 0) setPropType(keys[0]);
       setPropsLoading(false);
+    }).catch(err => {
+      setProps({});
+      setPropsLoading(false);
     });
   }, [market]);
 
@@ -496,8 +515,10 @@ function EventDetail({ event, onBack }) {
             {!propsLoading && propTypes.length === 0 && (
               <div style={{ textAlign:"center", padding:"32px 0" }}>
                 <div style={{ fontSize:32, marginBottom:12 }}>🏅</div>
-                <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:8 }}>No props available yet</div>
-                <div style={{ fontSize:13, color:C.muted }}>Player props typically appear 1–2 days before game time. Check back closer to tip-off.</div>
+                <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:8 }}>No props found</div>
+                <div style={{ fontSize:13, color:C.muted, marginBottom:8 }}>Player props may not be available for this game yet, or your API plan may not include props.</div>
+                <div style={{ fontSize:11, color:C.faint, fontFamily:"Roboto Mono,monospace" }}>Event ID: {event.id}</div>
+                <div style={{ fontSize:11, color:C.faint, fontFamily:"Roboto Mono,monospace" }}>Sport: {event.sportKey}</div>
               </div>
             )}
 
@@ -578,7 +599,7 @@ function EventDetail({ event, onBack }) {
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {SPORTSBOOKS.map(book => (
             <button key={book.apiKey} onClick={()=>trackAndOpen(book,"event-detail")} className="btn" style={{ padding:"8px 14px", background:`${book.color}12`, color:book.color, border:`1px solid ${book.color}33`, fontSize:13 }}>
-              {book.short} {book.name} ↗
+              {book.name} ↗
             </button>
           ))}
         </div>
@@ -1214,7 +1235,7 @@ export default function BettorOdds() {
   const [quota, setQuota]         = useState({ remaining: null, used: null });
   const [lastRefresh, setLastRefresh] = useState(null);
   const [debugLog, setDebugLog]   = useState([]);
-  const [showDebug, setShowDebug] = useState(false);
+  const [showDebug, setShowDebug] = useState(false); // hidden by default in production
 
   async function loadOdds() {
     setLoading(true);
@@ -1305,23 +1326,10 @@ export default function BettorOdds() {
 
             {error && <ErrorBox msg={error} onRetry={loadOdds} />}
 
-            {/* Debug panel */}
-            {debugLog.length > 0 && (
-              <div style={{ marginBottom:14 }}>
-                <button onClick={()=>setShowDebug(v=>!v)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:12, color:C.faint, padding:0 }}>
-                  {showDebug ? "▾" : "▸"} Debug log ({debugLog.length} entries)
-                </button>
-                {showDebug && (
-                  <div style={{ marginTop:8, background:"#1a1a2e", borderRadius:8, padding:12, fontFamily:"Roboto Mono,monospace", fontSize:11, color:"#a8e6cf", lineHeight:1.8 }}>
-                    {debugLog.map((l,i) => <div key={i}>{l}</div>)}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {apiWarnings.length > 0 && !showDebug && (
-              <div style={{ marginBottom:12, fontSize:12, color:C.amber }}>
-                ⚠️ {apiWarnings.length} sport{apiWarnings.length>1?"s":""} failed to load — click debug log above for details
+            {/* Only show warnings if significant sports failed */}
+            {apiWarnings.filter(w => !w.includes("too frequent")).length > 0 && (
+              <div style={{ marginBottom:12, fontSize:12, color:C.amber, background:C.amberBg, padding:"8px 12px", borderRadius:8 }}>
+                ⚠️ Some sports temporarily unavailable — will retry on next refresh
               </div>
             )}
 
